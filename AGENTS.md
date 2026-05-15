@@ -1,0 +1,341 @@
+# AGENTS.md - Todo API
+
+Instructions for AI agents working with this codebase.
+
+## Project Overview
+
+A production-ready RESTful API for managing todos with user authentication.
+
+**Stack:**
+
+- TypeScript 5.9.3 (strict mode, ES Modules)
+- Node.js 24+ with Express 5.2.1
+- PostgreSQL with Prisma ORM 7.2.0
+- JWT authentication (jsonwebtoken 9.0.3)
+- Bcrypt password hashing (6.0.0, 10 salt rounds)
+- Joi validation (18.0.2)
+- Pino structured logging (10.1.0)
+- Express-rate-limit (8.2.1)
+- Testing: Jest 29.7.0, ts-jest, Supertest
+
+**Architecture:**
+
+- `index.ts` - Server startup, database connection, graceful shutdown
+- `app.ts` - Express app factory, middleware pipeline, route mounting
+- `config/env.ts` - Environment variable validation with envalid
+- `types/` - TypeScript type definitions (index.ts, express.d.ts)
+- `errors/` - Custom error classes (AppError, AuthError, ValidationError, NotFoundError)
+- `models/` - Prisma models (User, Todo)
+- `routes/` - Express routers (auth, todos, health)
+- `middleware/` - Auth, validation, rate limiting, logging, error handling
+
+## Build and Test Commands
+
+```bash
+# Development
+pnpm run dev           # Start with tsx watch (hot reload)
+
+# Build
+pnpm run build         # Compile TypeScript to dist/
+pnpm run build:watch   # Watch mode compilation
+pnpm run typecheck     # Type check without emitting
+
+# Testing
+pnpm test              # Run all tests
+pnpm run test:watch    # Watch mode
+pnpm run test:coverage # Coverage report
+pnpm run test:integration # Integration tests only
+pnpm run test:unit     # Unit tests only
+pnpm run test:ci       # CI mode (coverage + 2 workers)
+
+# Linting
+pnpm run lint          # Check for issues
+pnpm run lint:fix      # Auto-fix issues
+
+# Benchmarking
+pnpm run bench:seed    # Seed benchmark users and todos
+pnpm run bench:all     # Full suite (all levels, both modes)
+pnpm run bench:echo    # Framework overhead only (medium level)
+pnpm run bench:app     # Application performance only (medium level)
+
+# Production
+pnpm run start         # Run compiled JS from dist/
+pnpm run start:prod    # Run in production mode
+```
+
+## Code Style Guidelines
+
+### TypeScript
+
+- All source files use `.ts` extension
+- Strict mode enabled (`strict: true` in tsconfig.json)
+- Use types from `types/index.ts` for consistency
+- Avoid `any` - use proper types or `unknown` with type guards
+- Use `Request`, `Response`, `NextFunction` from express for handlers
+
+### Module System
+
+- Use ES Modules: `import/export` syntax throughout
+- Named exports for middleware functions
+- Default exports for models and routers
+- Import with `.js` extension for Node.js compatibility (e.g., `import { auth } from './middleware/auth.js'`)
+
+### Async Operations
+
+- Always use `async/await` (no raw Promises or callbacks)
+- Wrap async route handlers in try/catch
+
+### Logging
+
+- Use `req.log` (Pino child logger with request context)
+- Available methods: `req.log.info()`, `req.log.warn()`, `req.log.error()`, `req.log.debug()`
+- First argument is context object, second is message string:
+  ```typescript
+  req.log.info({ userId: user.id, todoId: todo.id }, 'Todo created');
+  ```
+
+### Validation
+
+- Use Joi schemas defined in `middleware/validation.ts`
+- Add new schemas to the `schemas` object
+- Apply with `validate(schemas.schemaName)` middleware
+
+### Error Handling
+
+- Use custom error classes from `errors/index.ts` for consistent error responses
+- Available error classes:
+  - `AppError` - Base class for all custom errors
+  - `AuthError`, `InvalidCredentialsError`, `NoTokenError`, `InvalidTokenError` - Authentication errors (401)
+  - `ValidationError`, `DuplicateEmailError`, `InvalidIdFormatError` - Validation errors (400)
+  - `NotFoundError`, `TodoNotFoundError`, `RouteNotFoundError` - Not found errors (404)
+  - `InternalServerError` - Server errors (500)
+- Return early for error conditions
+- Log errors with full context before responding
+- Error response format:
+  ```typescript
+  const error = new TodoNotFoundError();
+  return res.status(error.statusCode).json({
+    ...error.toJSON(),
+    requestId: req.id,
+  });
+  ```
+
+### Naming Conventions
+
+- camelCase for variables and functions
+- PascalCase for models and classes
+- Descriptive names for clarity
+
+## Testing Instructions
+
+For the full testing guide (structure, helpers reference, writing tests, database setup, CI), see `docs/testing.md`.
+
+### Framework
+
+- Jest 29.7.0 with TypeScript support (ts-jest, ESM)
+- PostgreSQL with Prisma for isolated testing
+- Supertest for HTTP assertions
+
+### Writing Tests
+
+1. Use helper utilities from `__tests__/helpers/testSetup.ts`:
+
+   ```typescript
+   import {
+     createTestApp,
+     createTestUser,
+     connectTestDB,
+     disconnectTestDB,
+     cleanupTestData,
+   } from '../helpers/testSetup.js';
+
+   const app = createTestApp();
+
+   let authToken: string;
+   let userId: string;
+
+   beforeAll(async () => {
+     await connectTestDB();
+     ({ authToken, userId } = await createTestUser());
+   });
+   ```
+
+2. Clean up after tests:
+
+   ```typescript
+   afterEach(async () => {
+     await cleanupTestData();
+   });
+
+   afterAll(async () => {
+     await disconnectTestDB();
+   });
+   ```
+
+3. Test file naming: `*.test.ts` under `__tests__/`
+
+### Coverage Requirements
+
+- Minimum 80% coverage for branches, functions, lines, and statements
+- Run `pnpm run test:coverage` to verify
+
+## Security Considerations
+
+### Critical Rules
+
+1. **Never log sensitive data**
+
+   - Passwords, tokens, and authorization headers are automatically redacted
+   - Redaction configured in `middleware/logger.ts`
+   - Do not bypass or disable redaction
+
+2. **User isolation**
+
+   - All database queries MUST include `user: req.userId`
+   - Never allow cross-user data access
+   - Example: `Todo.find({ user: req.userId })` not `Todo.find({})`
+
+3. **Password handling**
+
+   - Passwords hashed with bcrypt (10 salt rounds) in User model pre-save hook
+   - Never store or return plain text passwords
+   - Use `user.comparePassword()` method for verification
+
+4. **JWT tokens**
+
+   - 24-hour expiration
+   - JWT_SECRET must be strong (32+ characters in production)
+   - Tokens validated in `middleware/auth.ts`
+
+5. **Rate limiting**
+   - Global: 200 requests per 15 minutes
+   - Register: 2 requests per hour
+   - Login: 3 failed attempts per 15 minutes
+   - Read operations: 100 per minute
+   - Write operations: 30 per minute
+   - Rate limiting is skipped in test environment only
+
+### Input Validation
+
+- All inputs validated with Joi schemas before processing
+- Validation middleware strips unknown fields (`stripUnknown: true`)
+- Email: max 72 characters, valid format
+- Password: 8-72 characters, must contain uppercase, lowercase, number, special character
+- Todo text: 1-500 characters, trimmed
+
+## Environment Setup
+
+For the full configuration reference (all variables, CORS, examples), see `docs/configuration.md`.
+
+### Required Environment Variables
+
+```env
+DATABASE_URL=postgresql://user:password@localhost:5432/todo-api  # PostgreSQL connection string
+JWT_SECRET=your-secret-key-min-32-chars                          # JWT signing secret
+PORT=3001                                                         # Server port
+```
+
+### Setup Steps
+
+1. Copy `.env.example` to `.env`
+2. Configure environment variables (see `docs/configuration.md` for all options)
+3. Ensure PostgreSQL is running (local or cloud instance)
+4. Run `pnpm install`
+5. Run `pnpm exec prisma migrate dev` to setup database
+6. Run `pnpm run dev`
+
+## Commit Guidelines
+
+### Format
+
+```
+<type>: <description>
+
+[optional body]
+```
+
+### Types
+
+- `feat`: New feature
+- `fix`: Bug fix
+- `docs`: Documentation changes
+- `test`: Adding or updating tests
+- `refactor`: Code refactoring (no feature change)
+- `chore`: Maintenance tasks
+
+### Examples
+
+```
+feat: add pagination to GET /todos endpoint
+fix: handle duplicate email error in registration
+test: add unit tests for auth middleware
+docs: update API documentation for rate limits
+```
+
+## Pull Request Guidelines
+
+1. Ensure all tests pass: `pnpm test`
+2. Maintain high coverage: `pnpm run test:coverage`
+3. Fix linting issues: `pnpm run lint:fix`
+4. Update documentation if API changes (see Documentation section below)
+5. Reference related issues in PR description
+
+## Roadmap Workflow
+
+The benchmark comparison infrastructure is complete. The current focus is cross-language performance comparison, not feature development.
+
+### Current State
+
+- **`ROADMAP.md`** tracks completed work and optional performance optimizations only
+- The TypeScript implementation satisfies the [Fair Comparison Requirements](plans/alternatives/FAIR-COMPARISON-REQUIREMENTS.md) spec
+- Do not implement features that are not in the roadmap unless explicitly requested by the user
+
+### After Implementation
+
+When an item from the roadmap is completed:
+
+1. **Move to the Completed section** in `ROADMAP.md`
+2. **Update docs if needed** - API changes go in `docs/api.md`, new env vars in `docs/configuration.md`, etc.
+3. **Ensure all tests pass** - Run `pnpm test` and maintain high coverage
+4. **Commit with proper format** - Use `feat:` for new features, see Commit Guidelines
+
+## Documentation
+
+Detailed reference docs live in `docs/`. The README is a landing page with summaries and links.
+
+| File                    | Content                                              |
+| ----------------------- | ---------------------------------------------------- |
+| `README.md`             | Quickstart, architecture, features, summary tables   |
+| `docs/api.md`           | Full API endpoint reference, error codes, status codes |
+| `docs/configuration.md` | All environment variables, CORS setup, `.env` examples |
+| `docs/docker.md`        | Docker build, run, production config, troubleshooting |
+| `docs/benchmarks.md`    | Benchmark methodology, k6 scripts, load levels, reproduction |
+| `docs/testing.md`               | Test framework, helpers, writing tests, CI config    |
+| `docs/runtime-correctness.md`   | Production runtime correctness plan (shutdown, pool, error handling) |
+| `docs/databases.md`             | Design memo for future audit-log (TimescaleDB) and search (pg_trgm → Elasticsearch) workstreams |
+| `ROADMAP.md`                    | Phased platform/production-readiness plan (SOC 2 priorities, open vs. done) |
+
+When changing API endpoints, update `docs/api.md`. When adding environment variables, update `docs/configuration.md`. When changing test infrastructure, update `docs/testing.md`. When changing benchmark infrastructure, update `docs/benchmarks.md`.
+
+## Key Files Quick Reference
+
+| File                         | Purpose                                           |
+| ---------------------------- | ------------------------------------------------- |
+| `index.ts`                   | Server startup, DB connection, graceful shutdown  |
+| `app.ts`                     | Express app factory, middleware pipeline          |
+| `config/env.ts`              | Environment variable validation                   |
+| `types/index.ts`             | Core TypeScript type definitions                  |
+| `types/express.d.ts`         | Express Request/Response augmentation             |
+| `errors/index.ts`            | Custom error classes (AppError, AuthError, etc.)  |
+| `middleware/auth.ts`         | JWT authentication                                |
+| `middleware/errorHandler.ts` | Centralized error handling with structured format |
+| `middleware/validation.ts`   | Joi schemas and validation middleware             |
+| `middleware/rateLimiter.ts`  | Rate limiting configuration                       |
+| `middleware/logger.ts`       | Pino logger setup                                 |
+| `models/User.ts`             | User model with password hashing                  |
+| `models/Todo.ts`             | Todo model                                        |
+| `routes/auth.ts`             | Register and login endpoints                      |
+| `routes/health.ts`           | Health check endpoints (liveness/readiness)       |
+| `routes/todos.ts`            | CRUD operations for todos                         |
+| `tsconfig.json`              | TypeScript compiler configuration                 |
+| `tsconfig.test.json`         | TypeScript config for tests                       |

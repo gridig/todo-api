@@ -1,0 +1,23 @@
+# Common
+/node_modules
+/coverage
+.DS_Store
+.nvmrc
+
+# Logs
+/logs
+*.log
+
+# Env
+.env*
+!.env.example
+
+# Generated Prisma Client
+/prisma/generated/prisma
+
+# Build output
+dist/
+
+# TypeScript
+*.tsbuildinfo
+/.pnpm-store

@@ -1,0 +1,33 @@
+generator client {
+  provider = "prisma-client"
+  output   = "./generated/prisma"
+  importFileExtension = "js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model Todo {
+  id         String   @id @default(uuid()) @db.Uuid
+  text       String   @db.VarChar(500)
+  done       Boolean  @default(false)
+  userId     String   @map("user_id") @db.Uuid
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@map("todos")
+}
+
+model User {
+  id         String   @id @default(uuid()) @db.Uuid
+  email      String   @unique
+  password   String
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+  todos      Todo[]
+
+  @@map("users")
+}
