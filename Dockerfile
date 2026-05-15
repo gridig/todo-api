@@ -5,7 +5,7 @@ WORKDIR /app
 RUN apt-get update -y && apt-get install -y openssl && rm -rf /var/lib/apt/lists/*
 
 COPY package.json pnpm-lock.yaml ./
-RUN corepack enable pnpm && pnpm install --frozen-lockfile
+RUN npm install -g pnpm@9.15.4 && pnpm install --frozen-lockfile
 
 COPY prisma ./prisma
 COPY prisma.config.ts ./
@@ -32,7 +32,7 @@ RUN apt-get update -y && apt-get install -y openssl && rm -rf /var/lib/apt/lists
 RUN groupadd --system appgroup && useradd --system --gid appgroup --create-home appuser
 
 COPY package.json pnpm-lock.yaml ./
-RUN corepack enable pnpm && pnpm install --frozen-lockfile --prod
+RUN npm install -g pnpm@9.15.4 && pnpm install --frozen-lockfile --prod
 
 COPY prisma/schema.prisma ./prisma/schema.prisma
 COPY prisma/migrations ./prisma/migrations
