@@ -40,7 +40,7 @@ COPY prisma.config.ts ./
 COPY --from=build /app/prisma/generated ./prisma/generated
 COPY --from=build /app/dist ./dist
 
-RUN chown -R appuser:appgroup /app/node_modules/.pnpm/@prisma+engines@7.2.0
+RUN chown -R appuser:appgroup /app/node_modules/.pnpm/@prisma+engines@*
 
 USER appuser
 
