@@ -43,7 +43,7 @@ router.get('/ready', healthLimiter, async (req: RequestWithLogger, res: Response
 
   // Check PostgreSQL connection
   let isDatabaseReady = false;
-  let databaseState = 'disconnected';
+  let databaseState: string;
 
   try {
     await prisma.$executeRaw`SELECT 1`;
