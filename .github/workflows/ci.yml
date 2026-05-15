@@ -111,7 +111,6 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version: ${{ env.NODE_VERSION }}
-          cache: pnpm
       # TODO: ratchet --audit-level back to high once the Prisma-transitive vuln
       # backlog is cleared. Tracked as a follow-up to moving `prisma` from
       # dependencies to devDependencies once `prisma migrate deploy` is off the
