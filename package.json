@@ -3,6 +3,15 @@
   "version": "1.0.0",
   "main": "index.js",
   "type": "module",
+  "packageManager": "pnpm@9.15.4",
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "@prisma/engines",
+      "bcrypt",
+      "esbuild",
+      "prisma"
+    ]
+  },
   "scripts": {
     "bench:seed": "tsx benchmarks/seed.ts",
     "bench:echo": "k6 run --env LOAD_LEVEL=medium benchmarks/k6/framework-overhead.js",
