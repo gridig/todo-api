@@ -6,20 +6,6 @@ This document outlines the infrastructure and production-readiness work required
 
 ## HIGH PRIORITY (Production Critical)
 
-### CI/CD Pipeline **[SOC 2]**
-
-**Priority**: High
-**Effort**: Medium
-**Impact**: High
-**SOC 2**: CC8.1 (Change Management), CC7.1 (Vulnerability Management)
-
-- [ ] Add branch protection rules (require passing checks before merge) **[SOC 2]** — non-code: configure in GitHub repo settings to require `Lint`, `Typecheck`, `Build`, `Test`, `Dependency audit` status checks before merge.
-- [ ] Require code review approval before merge **[SOC 2]** (CC8.1: authorized changes only) — non-code: configure in GitHub repo settings.
-- [ ] Add deployment pipeline (staging → production) **[SOC 2]**
-- [ ] Add deployment approval gate for production **[SOC 2]** (CC8.1: separation of duties)
-
-**Why**: Manual testing and deployment is error-prone. Automated pipelines catch regressions immediately and make releases repeatable. SOC 2 CC8.1 requires documented, repeatable change management with separation of duties.
-
 ### Connection Pool Configuration
 
 **Priority**: High
@@ -468,7 +454,7 @@ Pino is configured to redact passwords, tokens, and auth headers. However, the t
 
 ### Load Testing in CI
 
-k6 benchmark scripts exist (`benchmarks/k6/`) but are not part of the CI pipeline. Without automated performance regression detection, latency regressions can ship unnoticed. Consider adding a lightweight k6 smoke test to the CI pipeline (**CI/CD Pipeline**) with a latency threshold gate.
+k6 benchmark scripts exist (`benchmarks/k6/`) but are not part of the CI pipeline. Without automated performance regression detection, latency regressions can ship unnoticed. Consider adding a lightweight k6 smoke test to the CI pipeline with a latency threshold gate.
 
 ### Deployment Decisions (Non-Goals)
 
@@ -482,7 +468,6 @@ For a SOC 2-compliant production deployment, implement in this order:
 
 ### Phase A: Security & Infrastructure Foundation (SOC 2 blocking)
 
-- **CI/CD Pipeline** — Branch protection, code review enforcement, deployment pipeline, approval gate
 - **Connection Pool Configuration** — Pool observability, metrics exposure, health endpoint integration, query timeout
 - **Database Connection Resilience** — Startup retry, error classification, circuit breaker
 - **Audit Logging** — Immutable audit trail with PostgreSQL REVOKE for tamper evidence

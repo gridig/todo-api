@@ -10,7 +10,7 @@ A production-ready RESTful API for managing todos with user authentication.
 
 - TypeScript 5.9.3 (strict mode, ES Modules)
 - Node.js 24+ with Express 5.2.1
-- PostgreSQL with Prisma ORM 7.2.0
+- PostgreSQL with Prisma ORM 7.x
 - JWT authentication (jsonwebtoken 9.0.3)
 - Bcrypt password hashing (6.0.0, 10 salt rounds)
 - Joi validation (18.0.2)
@@ -279,6 +279,30 @@ docs: update API documentation for rate limits
 3. Fix linting issues: `pnpm run lint:fix`
 4. Update documentation if API changes (see Documentation section below)
 5. Reference related issues in PR description
+
+## Deployment
+
+GitHub Actions deploys to Railway. Workflow: [`.github/workflows/deploy.yml`](.github/workflows/deploy.yml).
+
+- **Staging**: automatic on push to `main`.
+- **Production**: manual `workflow_dispatch` from the Actions tab; gated by the `production` GitHub Environment's required-reviewer rule.
+
+The deploy step runs `railway up --ci --service todo-api`. The Railway project has three services (`todo-api`, `Postgres`, `Redis`); `--service todo-api` pins deploys to the app only.
+
+`RAILWAY_TOKEN` is a Railway Project Token scoped per environment, stored as an environment-scoped secret in GitHub Environments (one token for `staging`, one for `production`). Never put Railway tokens in repo-level secrets or commit them. Railway's native auto-deploy is disabled — the Actions workflow is the only path to either environment, so the required-reviewer gate cannot be bypassed.
+
+Do not propose adding deploy steps to other workflows or re-enabling Railway auto-deploy.
+
+## Dependency Updates
+
+Dependabot configuration: [`.github/dependabot.yml`](.github/dependabot.yml). Auto-merge policy: [`.github/workflows/dependabot-auto-merge.yml`](.github/workflows/dependabot-auto-merge.yml).
+
+- **npm patch + minor** and **github-actions patch + minor** auto-merge after CI passes. The workflow approves the PR as `github-actions[bot]` and enables GitHub's auto-merge; the approval satisfies the `main protection` ruleset's required-review rule. This is the documented SOC 2 change-management policy — the workflow file is the audit artifact.
+- **Majors** (any ecosystem) stay manual. Review the diff, the changelog, and run the test suite locally before merging.
+- **Docker ecosystem** stays manual. Node base-image bumps have repeatedly broken the build (Node 26 unbundled Corepack; etc.) — never auto-merge them.
+- **Security advisories** stay manual regardless of bump type.
+
+Do not manually merge Dependabot PRs that the auto-merge workflow would handle — let the workflow run. If a Dependabot PR is failing CI due to stale main, comment `@dependabot rebase` rather than rebasing manually.
 
 ## Roadmap Workflow
 
