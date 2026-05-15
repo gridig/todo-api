@@ -49,9 +49,11 @@ export const env = cleanEnv(process.env, {
 
   // CORS Configuration
   CORS_ORIGIN: str({
-    default: '*',
-    desc: "Allowed CORS origin(s). Use comma-separated list for multiple origins, or '*' for any origin",
-    example: 'https://example.com,https://app.example.com',
+    // No default: the app must fail fast on a missing CORS policy rather than
+    // silently fall into allow-all mode. Set explicitly per environment.
+    // Use '*' only when allow-all is genuinely intended (rare in production).
+    desc: "Allowed CORS origin(s). Comma-separated list of exact origins, or '*' to disable origin restriction.",
+    example: 'https://app.example.com,https://admin.example.com',
   }),
 
   CORS_CREDENTIALS: str({
