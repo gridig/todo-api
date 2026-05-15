@@ -1,0 +1,33 @@
+name: Dependabot auto-merge
+
+# Policy: auto-merge patch + minor bumps for npm and github-actions ecosystems
+# once CI is green. Majors and the docker ecosystem (Node base image) stay
+# manual — Node majors break things (e.g. Corepack unbundled in node:26-slim).
+
+on: pull_request
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  auto-merge:
+    if: github.event.pull_request.user.login == 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fetch Dependabot metadata
+        id: meta
+        uses: dependabot/fetch-metadata@v2
+
+      - name: Approve and enable auto-merge
+        if: |
+          (steps.meta.outputs.package-ecosystem == 'npm_and_yarn' ||
+           steps.meta.outputs.package-ecosystem == 'github_actions') &&
+          (steps.meta.outputs.update-type == 'version-update:semver-patch' ||
+           steps.meta.outputs.update-type == 'version-update:semver-minor')
+        run: |
+          gh pr review --approve "$PR_URL"
+          gh pr merge --auto --squash "$PR_URL"
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
