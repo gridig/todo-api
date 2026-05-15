@@ -26,7 +26,7 @@
     "test:server": "NODE_OPTIONS=--experimental-vm-modules jest index.test.js",
     "test:integration": "NODE_OPTIONS=--experimental-vm-modules jest __tests__/integration/",
     "test:unit": "NODE_OPTIONS=--experimental-vm-modules jest __tests__/unit/",
-    "test:ci": "NODE_OPTIONS=--experimental-vm-modules jest --ci --coverage --maxWorkers=2"
+    "test:ci": "NODE_OPTIONS=--experimental-vm-modules jest --ci --coverage"
   },
   "keywords": [],
   "author": "",

@@ -36,12 +36,16 @@ describe('Metrics Endpoint', () => {
       expect(response.text).toContain('active_connections');
     });
 
-    it('should include default Node.js metrics', async () => {
+    it('should not include default Node.js metrics under NODE_ENV=test', async () => {
+      // `collectDefaultMetrics({ register })` is gated on `env.NODE_ENV !== 'test'`
+      // in `middleware/metrics.ts` to prevent prom-client's setInterval samplers
+      // from firing after Jest tears down the VM. The metrics are emitted normally
+      // in development and production.
       const response = await request(app).get('/metrics');
 
-      expect(response.text).toContain('process_cpu_');
-      expect(response.text).toContain('nodejs_heap_size_total_bytes');
-      expect(response.text).toContain('nodejs_eventloop_lag_');
+      expect(response.text).not.toContain('process_cpu_');
+      expect(response.text).not.toContain('nodejs_heap_size_total_bytes');
+      expect(response.text).not.toContain('nodejs_eventloop_lag_');
     });
 
     it('should not be rate limited', async () => {
