@@ -87,9 +87,10 @@ jobs:
           --health-retries 10
 
     env:
+      # DATABASE_URL is set here (not in .env.test alone) because `prisma generate`
+      # and `prisma migrate deploy` run before Jest's setup.ts loads .env.test.
+      # JWT_SECRET, NODE_ENV, and CORS_* come from .env.test + __tests__/setup.ts.
       DATABASE_URL: postgresql://postgres:postgres@localhost:5432/todo_api
-      JWT_SECRET: ci-jwt-secret-key-for-github-actions-min-32-chars
-      NODE_ENV: test
 
     steps:
       - uses: actions/checkout@v4
