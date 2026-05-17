@@ -2,10 +2,13 @@ import { env } from './config/env.js';
 import { Server } from 'http';
 import cluster from 'cluster';
 import os from 'os';
-import prisma, { pool } from './lib/prisma.js';
+import prisma, { pool, probePool, logPoolHealth } from './lib/prisma.js';
 import { createApp } from './app.js';
 import logger from './middleware/logger.js';
 import { redisClient } from './middleware/rateLimiter.js';
+
+const POOL_HEALTH_LOG_INTERVAL_MS = 5 * 60 * 1000;
+let poolHealthInterval: ReturnType<typeof setInterval> | undefined;
 
 process.on('unhandledRejection', (reason) => {
   logger.fatal({ reason }, 'Unhandled promise rejection');
@@ -23,6 +26,16 @@ export async function startServer() {
     logger.info('Connecting to PostgreSQL...');
     await prisma.$connect();
     logger.info('PostgreSQL connected successfully');
+
+    // Periodic pool snapshot for log-aggregator alerting. Dev gets the same
+    // data on demand via /health/ready, so the interval is prod-only.
+    if (env.NODE_ENV === 'production') {
+      poolHealthInterval = setInterval(
+        logPoolHealth,
+        POOL_HEALTH_LOG_INTERVAL_MS,
+      );
+      poolHealthInterval.unref();
+    }
 
     const app = createApp();
     const PORT = env.PORT || 3001;
@@ -96,8 +109,14 @@ export function setupGracefulShutdown(server: Server): void {
       logger.info('Redis connection closed');
     }
 
+    if (poolHealthInterval) {
+      clearInterval(poolHealthInterval);
+      poolHealthInterval = undefined;
+    }
+    logPoolHealth();
+
     await prisma.$disconnect();
-    await pool.end();
+    await Promise.all([pool.end(), probePool.end()]);
     logger.info('PostgreSQL connection closed');
 
     clearTimeout(forceExit);

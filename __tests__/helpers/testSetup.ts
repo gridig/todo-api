@@ -1,7 +1,7 @@
 import { Application } from 'express';
 import type { User, JWTPayload } from '../../types/index.js';
 import { createApp } from '../../app.js';
-import prisma, { pool } from '../../lib/prisma.js';
+import prisma, { pool, probePool } from '../../lib/prisma.js';
 import jwt from 'jsonwebtoken';
 import crypto from 'crypto';
 import UserService from '../../models/User.js';
@@ -50,7 +50,7 @@ export async function connectTestDB(): Promise<void> {
 
 export async function disconnectTestDB(): Promise<void> {
   await prisma.$disconnect();
-  await pool.end();
+  await Promise.all([pool.end(), probePool.end()]);
 }
 
 export async function cleanupTestData(): Promise<void> {

@@ -197,7 +197,7 @@ Two endpoints are available:
 | Endpoint            | Purpose            | Returns                                                                      |
 | ------------------- | ------------------ | ---------------------------------------------------------------------------- |
 | `GET /health`       | Liveness probe     | Always `200` if the process is alive                                         |
-| `GET /health/ready` | Readiness probe    | `200` when healthy, `503` when database is unreachable or resources degraded |
+| `GET /health/ready` | Readiness probe    | `200` when healthy, `503` when the database is unreachable or the DB pool is saturated |
 | `GET /metrics`      | Prometheus metrics | `200` with process and application metrics in text exposition format         |
 
 For container orchestrators (Kubernetes, ECS):

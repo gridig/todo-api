@@ -56,6 +56,9 @@ export const activeConnections = new Gauge({
   registers: [register],
 });
 
+// db_pool_* gauges live in lib/prisma.ts (next to the pool they observe) and
+// register against the shared `register` exported above.
+
 // --- Middleware: instrument every request ---
 
 export const metricsMiddleware = (

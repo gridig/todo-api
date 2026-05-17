@@ -34,9 +34,10 @@ export const createApp = (): Application => {
   // Metrics instrumentation (starts the request timer)
   app.use(metricsMiddleware);
 
-  // Echo routes — disabled in production (benchmark tool that bypasses
-  // logging, rate limiting, and JSON parsing)
-  if (env.NODE_ENV !== 'production') {
+  // Echo routes — benchmark tool that bypasses logging, rate limiting, and
+  // JSON parsing. Gated by ENABLE_ECHO_ROUTES (defaults to true outside
+  // production, false in production).
+  if (env.ENABLE_ECHO_ROUTES) {
     app.use('/echo', echoRoutes);
   }
 
