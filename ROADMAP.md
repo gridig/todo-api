@@ -6,43 +6,6 @@ This document outlines the infrastructure and production-readiness work required
 
 ## HIGH PRIORITY (Production Critical)
 
-### Database Connection Resilience
-
-**Priority**: High
-**Effort**: Medium
-**Impact**: High
-
-The current implementation has no retry logic at startup, no distinction between transient and permanent database errors, and no circuit breaker for runtime operations. A brief network hiccup crashes the server at startup, and runtime database failures return generic 500 errors that clients cannot safely retry.
-
-#### Phase 1: Startup Resilience
-
-- [ ] Implement `connectWithRetry()` in `lib/dbConnect.ts` with exponential backoff
-- [ ] Add `DB_CONNECT_MAX_RETRIES` (default: 5) and `DB_CONNECT_INITIAL_DELAY_MS` (default: 1000) to `config/env.ts`
-- [ ] Add jitter to retry delays to prevent thundering herd on recovery
-- [ ] Update `index.ts` to use `connectWithRetry()` instead of direct `prisma.$connect()`
-- [ ] Add tests for retry behavior (mock connection failures)
-
-#### Phase 2: Error Classification
-
-- [ ] Create `errors/database.ts` with Prisma error code classification:
-  - Transient errors (P1001, P1002, P1008, P1017, P2024) → 503 Service Unavailable
-  - Constraint errors (P2002, P2003, P2025) → 400/404/409 as appropriate
-  - Permanent errors (P1000, P1010) → 500 Internal Server Error
-- [ ] Add `DatabaseUnavailableError` class (503, `DATABASE_UNAVAILABLE`, `retryable: true`)
-- [ ] Add `Retry-After` header to 503 responses
-- [ ] Update `middleware/errorHandler.ts` to use the new classification
-- [ ] Update tests for new error responses
-
-#### Phase 3: Circuit Breaker (Optional, for high-traffic deployments)
-
-- [ ] Implement circuit breaker in `lib/circuitBreaker.ts` with configurable thresholds
-- [ ] Create `lib/dbClient.ts` wrapper that routes operations through the circuit breaker
-- [ ] Add circuit breaker state to `/health/ready` response
-- [ ] Add `CircuitOpenError` handling in `errorHandler.ts` (503 + Retry-After)
-- [ ] Add environment variables: `DB_CIRCUIT_FAILURE_THRESHOLD`, `DB_CIRCUIT_TIMEOUT_MS`
-
-**Why**: Without startup retry, a momentary database unavailability (network blip, container startup race, cloud provider maintenance) crashes the server permanently. Without error classification, clients cannot distinguish "your request was bad" (don't retry) from "we're temporarily unavailable" (retry with backoff). Circuit breakers prevent cascading failures under sustained database issues. These are standard resilience patterns for production services.
-
 ### Audit Logging **[SOC 2]**
 
 **Priority**: High
@@ -420,6 +383,23 @@ Redis infrastructure already exists (`docker-compose.yml`, `REDIS_URL` env var, 
 
 **Why**: Redis is already deployed for rate limiting, so the infrastructure cost is zero. The short TTL ensures eventual consistency without complex invalidation logic. This is the natural intermediate step between pool tuning (shipped) and read replicas (**Database Read Replica Preparation**).
 
+### Database Circuit Breaker
+
+**Priority**: Low
+**Effort**: Medium
+**Impact**: Medium (only under sustained DB failure)
+
+Startup resilience (decorrelated-jitter retry in `lib/dbConnect.ts`) and runtime error classification (`errors/database.ts` → `classifyPrismaError()` mapping transient Prisma codes to `DatabaseUnavailableError` 503 + `Retry-After`) have shipped. A circuit breaker would add a third layer: trip after N consecutive failures to short-circuit further DB calls and let the dependency recover.
+
+- [ ] Implement circuit breaker in `lib/circuitBreaker.ts` with configurable thresholds
+- [ ] Create `lib/dbClient.ts` wrapper that routes operations through the circuit breaker
+- [ ] Add circuit breaker state to `/health/ready` response
+- [ ] Add `CircuitOpenError` handling in `errorHandler.ts` (503 + Retry-After)
+- [ ] Add environment variables: `DB_CIRCUIT_FAILURE_THRESHOLD`, `DB_CIRCUIT_TIMEOUT_MS`
+- [ ] Note prerequisite: only implement after monitoring shows sustained DB failures cascading into latency spikes — same gating pattern as **Read Caching for Hot Paths**
+
+**Why**: A circuit breaker prevents thundering-herd retries against a struggling database — once tripped, every request fails fast with 503 + `Retry-After` instead of queueing on the pool. It is genuinely optional: it pays off only when monitoring shows sustained DB failures cascading into latency spikes. Defer until that evidence exists.
+
 ---
 
 ## Cross-Cutting Concerns
@@ -448,7 +428,7 @@ For a SOC 2-compliant production deployment, implement in this order:
 
 ### Phase A: Security & Infrastructure Foundation (SOC 2 blocking)
 
-- **Database Connection Resilience** — Startup retry, error classification, circuit breaker
+- ~~**Database Connection Resilience**~~ — Startup retry (decorrelated jitter) and runtime Prisma error classification (transient → 503 `DATABASE_UNAVAILABLE` + `Retry-After`) shipped. Optional circuit breaker tracked separately.
 - **Audit Logging** — Immutable audit trail with PostgreSQL REVOKE for tamper evidence
 - **Database Backup & DR** — Automated backups, defined RPO/RTO, tested restores
 - **Encryption at Rest** — PostgreSQL encryption, key management documentation

@@ -147,6 +147,16 @@ export const env = cleanEnv(process.env, {
     desc: 'ms the readiness probe will wait for SELECT 1 on its dedicated probe connection. Tighter than DB_QUERY_TIMEOUT_MS so probe latency stays well under k8s readiness/liveness timeoutSeconds (default 1s) even under sustained saturation + jitter + GC.',
   }),
 
+  DB_CONNECT_MAX_RETRIES: num({
+    default: 5,
+    desc: 'Number of times to retry the initial Prisma connection at startup before giving up. Set to 0 to disable retry (fail fast).',
+  }),
+
+  DB_CONNECT_INITIAL_DELAY_MS: num({
+    default: 1000,
+    desc: 'Base delay (ms) for the first startup-connect retry. Subsequent delays use decorrelated jitter capped at 30s.',
+  }),
+
   REDIS_URL: str({
     default: undefined,
     desc: 'Optional Redis URL for distributed rate limiting',

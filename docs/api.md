@@ -521,7 +521,7 @@ All error responses follow a structured format with error codes for client-side 
 }
 ```
 
-Errors with `"retryable": true` in the details are safe to retry with exponential backoff.
+503 responses also carry a `Retry-After` header (seconds) — `30` for an unreachable database (`code: DATABASE_UNAVAILABLE`), `5` for transient pool-pressure errors. Errors with `"retryable": true` in the details are safe to retry with exponential backoff; respect `Retry-After` as the minimum wait. The `DATABASE_UNAVAILABLE` code is emitted when Prisma surfaces a transient connection error (codes P1001/P1002/P1008/P1017) or pool timeout (P2024).
 
 ### Error Codes Reference
 
@@ -536,6 +536,9 @@ Errors with `"retryable": true` in the details are safe to retry with exponentia
 | `DUPLICATE_VALUE`     | 409         | Unique constraint violation                    |
 | `INVALID_ID_FORMAT`   | 400         | Invalid UUID format                            |
 | `INVALID_JSON`        | 400         | Request body contains invalid JSON             |
+| `FOREIGN_KEY_CONSTRAINT` | 409      | Foreign-key constraint violation               |
+| `SERVICE_UNAVAILABLE` | 503         | Generic transient unavailability — retry with `Retry-After` |
+| `DATABASE_UNAVAILABLE` | 503        | Database unreachable or pool exhausted — retry with `Retry-After` |
 | `INTERNAL_ERROR`      | 500         | Unexpected server error                        |
 
 ### Status Codes
