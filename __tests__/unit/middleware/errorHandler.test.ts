@@ -211,6 +211,123 @@ describe('Error Handler Middleware', () => {
     });
   });
 
+  describe('Prisma error classification', () => {
+    it.each(['P1001', 'P1002', 'P1008', 'P1017'])(
+      'maps transient code %s to 503 DATABASE_UNAVAILABLE with Retry-After: 30',
+      (code) => {
+        const error = new Error(`Prisma ${code}`) as PrismaError;
+        error.code = code;
+
+        errorHandler(error, req, res, next);
+
+        expect(res.setHeader).toHaveBeenCalledWith('Retry-After', '30');
+        expect(res.status).toHaveBeenCalledWith(503);
+        expect(res.json).toHaveBeenCalledWith(
+          expect.objectContaining({
+            error: expect.objectContaining({
+              code: 'DATABASE_UNAVAILABLE',
+              details: expect.objectContaining({
+                retryable: true,
+                retryAfter: 30,
+              }),
+            }),
+            requestId: 'test-request-id',
+          }),
+        );
+      },
+    );
+
+    it('maps P2024 pool timeout to 503 with short Retry-After: 5', () => {
+      const error = new Error('Timed out fetching connection') as PrismaError;
+      error.code = 'P2024';
+
+      errorHandler(error, req, res, next);
+
+      expect(res.setHeader).toHaveBeenCalledWith('Retry-After', '5');
+      expect(res.status).toHaveBeenCalledWith(503);
+      expect(res.json).toHaveBeenCalledWith(
+        expect.objectContaining({
+          error: expect.objectContaining({
+            code: 'DATABASE_UNAVAILABLE',
+            message: 'Database connection pool exhausted',
+          }),
+        }),
+      );
+    });
+
+    it('maps P2003 foreign-key violation to 409 ConflictError', () => {
+      const error = new Error('FK constraint') as PrismaError;
+      error.code = 'P2003';
+
+      errorHandler(error, req, res, next);
+
+      expect(res.status).toHaveBeenCalledWith(409);
+      expect(res.json).toHaveBeenCalledWith(
+        expect.objectContaining({
+          error: expect.objectContaining({
+            code: 'FOREIGN_KEY_CONSTRAINT',
+          }),
+        }),
+      );
+    });
+
+    it.each(['P1000', 'P1010'])(
+      'maps config-error code %s to 500 INTERNAL_ERROR (not retryable)',
+      (code) => {
+        const error = new Error(`Prisma ${code}`) as PrismaError;
+        error.code = code;
+
+        errorHandler(error, req, res, next);
+
+        expect(res.status).toHaveBeenCalledWith(500);
+        expect(res.json).toHaveBeenCalledWith(
+          expect.objectContaining({
+            error: expect.objectContaining({
+              code: 'INTERNAL_ERROR',
+            }),
+          }),
+        );
+        expect(res.setHeader).not.toHaveBeenCalledWith(
+          'Retry-After',
+          expect.anything(),
+        );
+      },
+    );
+
+    it('does not shadow the existing P2002 DuplicateEmail routing', () => {
+      const error = new Error('Unique constraint failed') as PrismaError;
+      error.code = 'P2002';
+      error.meta = { target: ['email'] };
+
+      errorHandler(error, req, res, next);
+
+      expect(res.status).toHaveBeenCalledWith(409);
+      expect(res.json).toHaveBeenCalledWith(
+        expect.objectContaining({
+          error: expect.objectContaining({
+            code: 'DUPLICATE_EMAIL',
+          }),
+        }),
+      );
+    });
+
+    it('falls through to InternalServerError for unknown Prisma codes', () => {
+      const error = new Error('Unknown Prisma error') as PrismaError;
+      error.code = 'P9999';
+
+      errorHandler(error, req, res, next);
+
+      expect(res.status).toHaveBeenCalledWith(500);
+      expect(res.json).toHaveBeenCalledWith(
+        expect.objectContaining({
+          error: expect.objectContaining({
+            code: 'INTERNAL_ERROR',
+          }),
+        }),
+      );
+    });
+  });
+
   describe('Invalid UUID Format Handling', () => {
     it('should handle invalid UUID format error', () => {
       const error = new Error('Invalid UUID') as PrismaError;

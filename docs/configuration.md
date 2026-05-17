@@ -60,6 +60,12 @@ Pool sizing rule: `DB_POOL_MAX × replica_count × CLUSTER_WORKERS` must stay we
 | `DB_IDLE_TIMEOUT_MS`       | Number | `10000` | ms before an idle connection is released                                           |
 | `DB_QUERY_TIMEOUT_MS`      | Number | `5000`  | ms a single query may run before the connection is killed and returned to the pool |
 | `DB_PROBE_TIMEOUT_MS`      | Number | `1000`  | ms ceiling for the readiness probe's `SELECT 1` (runs on a dedicated single-connection pool, not the application pool — see Observability) |
+| `DB_CONNECT_MAX_RETRIES`   | Number | `5`     | Retries after the initial `$connect` at startup before giving up. `0` disables retry (fail fast)                                          |
+| `DB_CONNECT_INITIAL_DELAY_MS` | Number | `1000`  | Base delay (ms) for the first startup-connect retry; subsequent delays use decorrelated jitter capped at 30 s                            |
+
+#### Startup connection retry
+
+The initial `prisma.$connect()` at boot is retried with **decorrelated jitter** (AWS SDK style): `delay_n = random(base, min(30s, delay_{n-1} * 3))`. This survives a transient database blip during container startup (network jitter, brief DB maintenance, replica failover) without crashing the process into a `CrashLoopBackOff` against the same root cause. After `DB_CONNECT_MAX_RETRIES + 1` total attempts the last error is re-thrown, the fatal handler logs it, and the orchestrator can take it from there. Set `DB_CONNECT_MAX_RETRIES=0` to skip retry and fail fast — useful in CI where a missing database should be loud.
 
 #### Sizing recommendations
 
@@ -265,6 +271,8 @@ DB_POOL_MAX=10
 DB_POOL_MIN=2
 DB_CONNECTION_TIMEOUT_MS=5000
 DB_IDLE_TIMEOUT_MS=10000
+# DB_CONNECT_MAX_RETRIES=5         # Retries on the initial $connect; 0 disables
+# DB_CONNECT_INITIAL_DELAY_MS=1000 # Base delay (ms) for the first retry
 
 # Redis (optional)
 # REDIS_URL=redis://localhost:6379

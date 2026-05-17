@@ -7,6 +7,7 @@ import {
   NotFoundError,
   ServiceUnavailableError,
 } from '../errors/index.js';
+import { classifyPrismaError } from '../errors/database.js';
 import type { RequestWithLogger } from '../types/index.js';
 
 
@@ -43,6 +44,20 @@ const isJsonParseError = (error: unknown): error is JsonParseError => {
   );
 };
 
+const respondWithAppError = (
+  res: Response,
+  requestId: string,
+  appError: AppError,
+): void => {
+  if (appError instanceof ServiceUnavailableError) {
+    res.setHeader('Retry-After', String(appError.retryAfterSeconds));
+  }
+  res.status(appError.statusCode).json({
+    ...appError.toJSON(),
+    requestId,
+  });
+};
+
 
 export const errorHandler = (
   err: Error,
@@ -67,13 +82,16 @@ export const errorHandler = (
 
   // Handle our custom AppError instances
   if (err instanceof AppError) {
-    if (err instanceof ServiceUnavailableError) {
-      res.setHeader('Retry-After', String(err.retryAfterSeconds));
-    }
-    res.status(err.statusCode).json({
-      ...err.toJSON(),
-      requestId,
-    });
+    respondWithAppError(res, requestId, err);
+    return;
+  }
+
+  // Map known Prisma error codes (transient → 503, FK conflict → 409, etc.)
+  // to typed AppErrors. Returns null for P2002/P2025 (handled below with
+  // richer field-level routing) and for codes we don't recognise.
+  const classified = classifyPrismaError(err);
+  if (classified) {
+    respondWithAppError(res, requestId, classified);
     return;
   }
 

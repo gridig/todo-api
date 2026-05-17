@@ -2,9 +2,15 @@ import { env } from './config/env.js';
 import { Server } from 'http';
 import cluster from 'cluster';
 import os from 'os';
-import prisma, { pool, probePool, logPoolHealth } from './lib/prisma.js';
+import prisma, {
+  pool,
+  probePool,
+  probeDatabase,
+  logPoolHealth,
+} from './lib/prisma.js';
 import { createApp } from './app.js';
 import logger from './middleware/logger.js';
+import { connectWithRetry } from './lib/dbConnect.js';
 import { redisClient } from './middleware/rateLimiter.js';
 
 const POOL_HEALTH_LOG_INTERVAL_MS = 5 * 60 * 1000;
@@ -22,9 +28,21 @@ process.on('uncaughtException', (err) => {
 
 export async function startServer() {
   try {
-    // Test PostgreSQL connection
+    // Connect to PostgreSQL with retry/backoff so a transient startup blip
+    // (network jitter, container race, brief DB maintenance) doesn't crash
+    // the process into a CrashLoopBackOff against the same root cause.
+    // $connect() with the PrismaPg adapter is a near-noop (lazy on first
+    // query), so we follow it with probeDatabase() — a real SELECT 1 on the
+    // probe pool — to actually surface a TCP / auth / DB-down failure and
+    // trigger the retry loop.
     logger.info('Connecting to PostgreSQL...');
-    await prisma.$connect();
+    await connectWithRetry(
+      async () => {
+        await prisma.$connect();
+        await probeDatabase();
+      },
+      logger,
+    );
     logger.info('PostgreSQL connected successfully');
 
     // Periodic pool snapshot for log-aggregator alerting. Dev gets the same
