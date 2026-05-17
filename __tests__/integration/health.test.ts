@@ -5,7 +5,7 @@ import {
   connectTestDB,
   disconnectTestDB,
 } from '../helpers/testSetup.js';
-import prisma from '../../lib/prisma.js';
+import { probePool } from '../../lib/prisma.js';
 
 const app = createTestApp();
 
@@ -54,26 +54,29 @@ describe('Health Check Endpoints', () => {
 
 describe('GET /health/ready - Database Failure', () => {
   it('should return 503 when database is unavailable', async () => {
-    // Mock database failure
-    const originalExecuteRaw = prisma.$executeRaw;
-    prisma.$executeRaw = jest
-      .fn<any>()
-      .mockRejectedValue(new Error('Connection refused'));
+    // Mock failure on the dedicated probe pool. The application pool is left
+    // alone so this only exercises the probe path.
+    const querySpy = jest
+      .spyOn(probePool, 'query')
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      .mockRejectedValue(new Error('Connection refused') as never) as any;
 
-    const response = await request(app).get('/health/ready');
+    try {
+      const response = await request(app).get('/health/ready');
 
-    expect(response.status).toBe(503);
-    expect(response.body).toMatchObject({
-      status: 'degraded',
-      checks: {
-        database: {
-          status: 'error',
-          state: 'error',
+      expect(response.status).toBe(503);
+      expect(response.headers['retry-after']).toBe('30');
+      expect(response.body).toMatchObject({
+        status: 'degraded',
+        checks: {
+          database: {
+            status: 'error',
+            state: 'error',
+          },
         },
-      },
-    });
-
-    // Restore original
-    prisma.$executeRaw = originalExecuteRaw;
+      });
+    } finally {
+      querySpy.mockRestore();
+    }
   });
 });

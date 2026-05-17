@@ -6,26 +6,6 @@ This document outlines the infrastructure and production-readiness work required
 
 ## HIGH PRIORITY (Production Critical)
 
-### Connection Pool Configuration
-
-**Priority**: High
-**Effort**: Low
-**Impact**: High
-
-Pool observability and tuning. Pool sizing env vars (`DB_POOL_MAX`, `DB_POOL_MIN`, `DB_CONNECTION_TIMEOUT_MS`, `DB_IDLE_TIMEOUT_MS`) are in place; the remaining work surfaces pool state and adds a query-timeout safety net.
-
-- [ ] Add pool event logging (`connect`, `acquire`, `release`, `remove`, `error`)
-- [ ] Expose `getPoolMetrics()` function returning `{ totalConnections, idleConnections, waitingClients, maxConnections }`
-- [ ] Add pool utilization percentage to `/health/ready` response
-- [ ] Add periodic pool health logging in production (every 5 minutes)
-- [ ] Alert when pool utilization exceeds 80%
-- [ ] Add `DB_QUERY_TIMEOUT_MS` env var (default: `5000`) to `config/env.ts`; pass as `query_timeout` on the `pg.Pool` instance — prevents slow queries from holding connections indefinitely and starving the pool; clients receive a 503 rather than waiting forever
-- [ ] Document pool sizing recommendations for deployment profiles (single instance, multi-instance, serverless) based on benchmark evidence — the default `DB_POOL_MAX=10` causes the latency cliff at high load; document the formula `pool_size = (cpu_cores * 2) + disk_spindles` and recommended values for common configurations
-
-**Why**: Under load, the default pool of 10 connections is insufficient and causes request queuing. Explicit pool tuning prevents the "more servers = more connections hammering the DB" problem. Query timeouts are the last line of defence against runaway queries that would otherwise exhaust the pool even when pool sizing is correct.
-
-**Benchmark evidence**: k6 results show a latency cliff between medium and high load — average request duration jumps from 4.17ms (1,402 req/s) to 205ms (1,304 req/s), a 50x latency increase with only a 3x load increase. Throughput actually decreases under higher concurrency. This is the classic signature of connection pool exhaustion: once all 10 default connections are busy, additional requests queue behind them. See `docs/benchmarks.md` (Benchmark Results).
-
 ### Database Connection Resilience
 
 **Priority**: High
@@ -363,7 +343,7 @@ The Redis store factory is implemented in `middleware/rateLimiter.ts` with grace
 - [ ] Apply field projection to all Prisma queries (select only needed fields)
 - [ ] Profile and optimize hot paths identified by monitoring
 
-**Why**: k6 load testing identified the database as the primary bottleneck (~95% of request latency). The highest-impact optimizations (indexing, **Connection Pool Configuration**, query reduction, pagination) are either already shipped or tracked as higher-priority items. Field projection for the User model has a security dimension beyond performance: the `password` hash should not be held in memory when only the user ID or email is needed. Slow query logging is tracked in **Monitoring & Observability**.
+**Why**: k6 load testing identified the database as the primary bottleneck (~95% of request latency). The highest-impact optimizations (indexing, pool sizing/tuning, query reduction, pagination) are already shipped. Field projection for the User model has a security dimension beyond performance: the `password` hash should not be held in memory when only the user ID or email is needed. Slow query logging is tracked in **Monitoring & Observability**.
 
 ### Search & Discovery
 
@@ -401,7 +381,7 @@ Single `DATABASE_URL` connects to one PostgreSQL instance for all operations. As
 - [ ] Document read replica strategy: `DATABASE_READ_URL` env var, second Prisma client, read/write routing
 - [ ] Identify which queries route to the read client (list endpoints, read-heavy aggregations)
 - [ ] Identify which queries must stay on the primary (all mutations)
-- [ ] Note prerequisite: only implement after pagination (shipped), indexing (shipped), and **Connection Pool Configuration** prove insufficient
+- [ ] Note prerequisite: only implement after pagination (shipped), indexing (shipped), and pool sizing/tuning (shipped) prove insufficient
 
 **Why**: Read replicas are the next scaling lever after single-instance optimizations are exhausted. Documenting the approach now ensures the team has a plan before it becomes urgent. No code change needed until monitoring shows the database is read-bound after all other optimizations are in place.
 
@@ -436,9 +416,9 @@ Redis infrastructure already exists (`docker-compose.yml`, `REDIS_URL` env var, 
 - [ ] Add cache hit/miss counter to Prometheus metrics (`middleware/metrics.ts`)
 - [ ] Graceful degradation: skip cache when Redis is unavailable (same pattern as rate limiter fallback in `middleware/rateLimiter.ts`)
 - [ ] Add tests for cache hit, cache miss, invalidation, and Redis-down fallback
-- [ ] Note prerequisite: only implement after **Connection Pool Configuration** and pool sizing prove insufficient — same gating pattern as **Database Read Replica Preparation**
+- [ ] Note prerequisite: only implement after pool sizing/tuning (shipped) proves insufficient — same gating pattern as **Database Read Replica Preparation**
 
-**Why**: Redis is already deployed for rate limiting, so the infrastructure cost is zero. The short TTL ensures eventual consistency without complex invalidation logic. This is the natural intermediate step between pool tuning (**Connection Pool Configuration**) and read replicas (**Database Read Replica Preparation**).
+**Why**: Redis is already deployed for rate limiting, so the infrastructure cost is zero. The short TTL ensures eventual consistency without complex invalidation logic. This is the natural intermediate step between pool tuning (shipped) and read replicas (**Database Read Replica Preparation**).
 
 ---
 
@@ -468,7 +448,6 @@ For a SOC 2-compliant production deployment, implement in this order:
 
 ### Phase A: Security & Infrastructure Foundation (SOC 2 blocking)
 
-- **Connection Pool Configuration** — Pool observability, metrics exposure, health endpoint integration, query timeout
 - **Database Connection Resilience** — Startup retry, error classification, circuit breaker
 - **Audit Logging** — Immutable audit trail with PostgreSQL REVOKE for tamper evidence
 - **Database Backup & DR** — Automated backups, defined RPO/RTO, tested restores

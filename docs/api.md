@@ -265,7 +265,9 @@ Health check endpoints for monitoring and container orchestration. These endpoin
 
 **GET** `/health/ready`
 
-**Description**: Comprehensive readiness check -- is the server ready to handle requests? Checks PostgreSQL connection, memory usage, and CPU load.
+**Description**: Readiness check -- is the server ready to handle traffic right now? Returns 503 when (a) PostgreSQL is unreachable or (b) the DB connection pool is saturated (every connection busy, pool fully grown, clients already queued). Memory and CPU pressure are reported as observational sub-checks but do not affect the readiness verdict — load average lingers after bursts and high heap doesn't mean the process can't serve requests (use the `/health` liveness probe for OOM-style concerns instead).
+
+The database reachability check runs `SELECT 1` on a **dedicated single-connection pool** that is never shared with application traffic. This means probe latency is bounded by `DB_PROBE_TIMEOUT_MS` (default 1s) regardless of how saturated the application pool is, so successive probes can't drift past `failureThreshold × timeoutSeconds` under sustained load.
 
 **Response** (200 OK - Healthy):
 
@@ -298,12 +300,23 @@ Health check endpoints for monitoring and container orchestration. These endpoin
       },
       "cpuCount": 8,
       "threshold": 8
+    },
+    "pool": {
+      "status": "ok",
+      "total": 4,
+      "idle": 3,
+      "waiting": 0,
+      "max": 10,
+      "utilization": "10.0%",
+      "threshold": "80%"
     }
   }
 }
 ```
 
 **Response** (503 Service Unavailable - Degraded):
+
+Returned when the database is unreachable **or** the DB pool is saturated. The body's sub-checks identify which condition tripped readiness — the example below shows pool saturation.
 
 ```json
 {
@@ -313,23 +326,35 @@ Health check endpoints for monitoring and container orchestration. These endpoin
   "version": "1.0.0",
   "environment": "production",
   "checks": {
-    "database": {
+    "database": { "status": "ok", "state": "connected" },
+    "memory":   { "status": "ok", "...": "..." },
+    "cpu":      { "status": "ok", "...": "..." },
+    "pool": {
       "status": "error",
-      "state": "disconnected"
-    },
-    "memory": { "status": "ok", "...": "..." },
-    "cpu": { "status": "ok", "...": "..." }
+      "total": 10,
+      "idle": 0,
+      "waiting": 7,
+      "max": 10,
+      "utilization": "100.0%",
+      "threshold": "80%"
+    }
   }
 }
 ```
 
+The response includes a `Retry-After` header — `5` seconds for pool saturation (recovers quickly), `30` seconds for an unreachable database.
+
 **Check Thresholds**:
 
-| Check      | Threshold                      | Status on Failure |
-| ---------- | ------------------------------ | ----------------- |
-| PostgreSQL | `SELECT 1` query must succeed  | `error`           |
-| Memory     | Heap usage < 90%               | `warning`         |
-| CPU        | 1-min load average < CPU count | `warning`         |
+| Check      | Threshold                                                                  | Sub-check status on breach | Affects readiness? |
+| ---------- | -------------------------------------------------------------------------- | -------------------------- | ------------------ |
+| PostgreSQL | `SELECT 1` query must succeed                                              | `error`                    | **Yes (503)**      |
+| DB Pool    | `idle === 0` AND `total >= max` AND `waiting > 0` (saturation)             | `error`                    | **Yes (503)**      |
+| DB Pool    | Utilization ≥ 80% but not saturated                                        | `warning`                  | No                 |
+| Memory     | Heap usage < 90%                                                           | `warning`                  | No                 |
+| CPU        | 1-min load average < CPU count                                             | `warning`                  | No                 |
+
+Only the rows marked **Yes** flip the overall body `status` to `"degraded"` and emit the `Health check - readiness probe failed` WARN log. Pool saturation responses include `Retry-After: 5` (recovers quickly as queries drain); DB-unreachable responses include `Retry-After: 30`.
 
 **Kubernetes Configuration Example**:
 

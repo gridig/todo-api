@@ -33,7 +33,11 @@ export const requestLoggerMiddleware = (
       userAgent: req.get('user-agent'),
     };
 
-    if (statusCode >= 500) {
+    // 503 is deliberate backpressure (saturation, readiness fail, maintenance)
+    // per RFC 9110 §15.6.4 — expected and recoverable, not a server bug. Group
+    // it with 4xx at WARN so true server faults (500/502/504) keep ERROR's
+    // signal value for on-call alerting and log-pipeline sampling.
+    if (statusCode >= 500 && statusCode !== 503) {
       log.error(logFields, 'Request completed');
     } else if (statusCode >= 400) {
       log.warn(logFields, 'Request completed');

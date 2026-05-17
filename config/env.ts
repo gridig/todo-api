@@ -100,6 +100,11 @@ export const env = cleanEnv(process.env, {
     desc: 'Disable rate limiting',
   }),
 
+  ENABLE_ECHO_ROUTES: bool({
+    default: process.env.NODE_ENV !== 'production',
+    desc: 'Expose the /echo benchmark routes (no logging, no rate limiting, no body parsing). Defaults to true in non-production, false in production. Set to true in production only on a dedicated benchmark process — never on an instance serving real traffic.',
+  }),
+
   // Shutdown Configuration
   SHUTDOWN_DELAY_MS: num({
     default: 5000,
@@ -130,6 +135,16 @@ export const env = cleanEnv(process.env, {
   DB_IDLE_TIMEOUT_MS: num({
     default: 10000,
     desc: 'ms before idle connection is released',
+  }),
+
+  DB_QUERY_TIMEOUT_MS: num({
+    default: 5000,
+    desc: 'ms a single query may run before the connection is killed and returned to the pool',
+  }),
+
+  DB_PROBE_TIMEOUT_MS: num({
+    default: 1000,
+    desc: 'ms the readiness probe will wait for SELECT 1 on its dedicated probe connection. Tighter than DB_QUERY_TIMEOUT_MS so probe latency stays well under k8s readiness/liveness timeoutSeconds (default 1s) even under sustained saturation + jitter + GC.',
   }),
 
   REDIS_URL: str({

@@ -90,7 +90,7 @@ describe('Request Logger Middleware', () => {
     );
   });
 
-  it('should log at error level for 5xx responses', () => {
+  it('should log at error level for 500 responses', () => {
     res.statusCode = 500;
     requestLoggerMiddleware(req, res, next);
     res.emit('finish');
@@ -107,6 +107,46 @@ describe('Request Logger Middleware', () => {
       'Request completed',
     );
     expect(req.log.warn).not.toHaveBeenCalledWith(
+      expect.anything(),
+      'Request completed',
+    );
+  });
+
+  it('should log at error level for 502 responses', () => {
+    res.statusCode = 502;
+    requestLoggerMiddleware(req, res, next);
+    res.emit('finish');
+
+    expect(req.log.error).toHaveBeenCalledWith(
+      expect.objectContaining({ statusCode: 502 }),
+      'Request completed',
+    );
+  });
+
+  it('should log at error level for 504 responses', () => {
+    res.statusCode = 504;
+    requestLoggerMiddleware(req, res, next);
+    res.emit('finish');
+
+    expect(req.log.error).toHaveBeenCalledWith(
+      expect.objectContaining({ statusCode: 504 }),
+      'Request completed',
+    );
+  });
+
+  it('should log at warn level for 503 responses (deliberate backpressure, not a server fault)', () => {
+    res.statusCode = 503;
+    requestLoggerMiddleware(req, res, next);
+    res.emit('finish');
+
+    expect(req.log.warn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        statusCode: 503,
+        userAgent: 'test-user-agent',
+      }),
+      'Request completed',
+    );
+    expect(req.log.error).not.toHaveBeenCalledWith(
       expect.anything(),
       'Request completed',
     );

@@ -138,6 +138,14 @@ DISABLE_RATE_LIMIT=true pnpm run dev
 
 The runner script (`run.sh`) does not set this automatically — it must be configured on the server process. If rate limiting is left enabled, the global limiter (200 requests / 15 minutes) will throttle the benchmark within seconds.
 
+The `bench:echo` / `framework-overhead.js` script targets the `/echo` endpoint, which is hidden by default in production. When benchmarking against a production-mode process, also set `ENABLE_ECHO_ROUTES=true`:
+
+```bash
+DISABLE_RATE_LIMIT=true ENABLE_ECHO_ROUTES=true pnpm run start
+```
+
+The two flags are deliberately separate: `DISABLE_RATE_LIMIT` is sometimes useful for prod debugging on its own, and shouldn't silently expose a debug endpoint as a side-effect.
+
 ## Running Individual Benchmarks
 
 ```bash
