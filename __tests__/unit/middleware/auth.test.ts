@@ -110,7 +110,7 @@ describe('Auth Middleware', () => {
     const expiredToken = jwt.sign(
       { userId: '123' },
       process.env.JWT_SECRET as string,
-      { expiresIn: '-1s' } // Already expired
+      { expiresIn: '-1h' } // Far past the 5s clockTolerance
     );
     req.header.mockReturnValue(`Bearer ${expiredToken}`);
 
@@ -194,8 +194,21 @@ describe('Auth Middleware', () => {
     expect(next).not.toHaveBeenCalled();
   });
 
-  it('should reject token whose payload is missing userId', () => {
+  it('should accept token with sub claim (RFC-7519 subject)', () => {
     const token = jwt.sign({ sub: '123' }, process.env.JWT_SECRET as string);
+    req.header.mockReturnValue(`Bearer ${token}`);
+
+    auth(req, res, next);
+
+    expect(req.userId).toBe('123');
+    expect(next).toHaveBeenCalled();
+  });
+
+  it('should reject token whose payload has neither sub nor userId', () => {
+    const token = jwt.sign(
+      { some: 'other-claim' },
+      process.env.JWT_SECRET as string,
+    );
     req.header.mockReturnValue(`Bearer ${token}`);
 
     auth(req, res, next);

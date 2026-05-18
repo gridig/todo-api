@@ -164,8 +164,37 @@ if (isMainModule) {
 
     let isShuttingDown = false;
 
+    // Crash-loop budget: a worker that crashes on startup (DB unreachable past
+    // retry budget, bad env, module-load bug) will spawn-and-crash in a tight
+    // loop without this. Let the platform's restart policy take over with a
+    // fresh container instead — surfaces the failure to the orchestrator
+    // rather than masking it under a high-frequency `warn` log line.
+    const MAX_RESTARTS_IN_WINDOW = 5;
+    const RESTART_WINDOW_MS = 60_000;
+    let recentRestarts: number[] = [];
+
     cluster.on('exit', (worker, code, signal) => {
       if (!isShuttingDown) {
+        const now = Date.now();
+        recentRestarts = recentRestarts.filter(
+          (t) => now - t < RESTART_WINDOW_MS,
+        );
+        recentRestarts.push(now);
+
+        if (recentRestarts.length > MAX_RESTARTS_IN_WINDOW) {
+          logger.fatal(
+            {
+              restarts: recentRestarts.length,
+              windowMs: RESTART_WINDOW_MS,
+              workerId: worker.id,
+              code,
+              signal,
+            },
+            'Worker crash-loop detected, primary exiting to let platform restart',
+          );
+          process.exit(1);
+        }
+
         logger.warn(
           { pid: worker.process.pid, workerId: worker.id, code, signal },
           'Worker exited unexpectedly, spawning replacement',

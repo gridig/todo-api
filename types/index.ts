@@ -93,8 +93,16 @@ export type AuthRouteResponse = AuthResponse | ErrorResponse;
 
 // ==================== JWT Types ====================
 
+// Tokens issued post-2026-05 use `sub` (RFC 7519 standard claim) plus
+// `iss`/`aud`. Tokens issued before the rollout still carry the legacy
+// `userId` payload; middleware/auth.ts accepts either while the grace
+// window flag JWT_VERIFY_REQUIRE_CLAIMS is false, then drops the
+// back-compat path on the follow-up deploy.
 export interface JWTPayload {
-  userId: string;
+  sub?: string;
+  userId?: string;
+  iss?: string;
+  aud?: string;
   iat?: number;
   exp?: number;
 }
@@ -146,6 +154,8 @@ export interface UserServiceInterface {
     plainPassword: string,
     hashedPassword: string
   ): Promise<boolean>;
+  updatePassword(userId: string, plainPassword: string): Promise<void>;
+  needsRehash(hashedPassword: string): boolean;
   deleteMany(): Promise<{ count: number }>;
 }
 

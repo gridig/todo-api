@@ -76,4 +76,59 @@ describe('RequestId Middleware', () => {
     expect(req.log.info).toBeDefined();
     expect(req.log.error).toBeDefined();
   });
+
+  describe('input validation', () => {
+    const UUID_PATTERN =
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+    it('falls back to a UUID when x-request-id contains forbidden characters', () => {
+      req.headers['x-request-id'] = 'evil\nLog-Injection: x';
+
+      requestIdMiddleware(req, res, next);
+
+      expect(req.id).toMatch(UUID_PATTERN);
+      expect(res.setHeader).toHaveBeenCalledWith(
+        'X-Request-ID',
+        expect.stringMatching(UUID_PATTERN),
+      );
+    });
+
+    it('falls back to a UUID when x-request-id exceeds 64 characters', () => {
+      req.headers['x-request-id'] = 'a'.repeat(65);
+
+      requestIdMiddleware(req, res, next);
+
+      expect(req.id).toMatch(UUID_PATTERN);
+    });
+
+    it('accepts an x-request-id of exactly 64 characters', () => {
+      const id = 'a'.repeat(64);
+      req.headers['x-request-id'] = id;
+
+      requestIdMiddleware(req, res, next);
+
+      expect(req.id).toBe(id);
+    });
+
+    it('falls back to a UUID when x-request-id is empty', () => {
+      req.headers['x-request-id'] = '';
+
+      requestIdMiddleware(req, res, next);
+
+      expect(req.id).toMatch(UUID_PATTERN);
+    });
+
+    it('does not echo an unsafe x-correlation-id header', () => {
+      req.headers['x-correlation-id'] = 'evil value with spaces';
+
+      requestIdMiddleware(req, res, next);
+
+      // X-Correlation-ID is set only when the inbound value passes validation.
+      const calls = (res.setHeader as jest.Mock).mock.calls;
+      const correlationCall = calls.find(
+        (call) => call[0] === 'X-Correlation-ID',
+      );
+      expect(correlationCall).toBeUndefined();
+    });
+  });
 });

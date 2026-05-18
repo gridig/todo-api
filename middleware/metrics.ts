@@ -6,6 +6,7 @@ import {
   collectDefaultMetrics,
 } from 'prom-client';
 import type { Request, Response, NextFunction } from 'express';
+import { timingSafeEqual } from 'node:crypto';
 import { env } from '../config/env.js';
 
 export const register = new Registry();
@@ -87,13 +88,19 @@ export const metricsMiddleware = (
 // --- Middleware: guard GET /metrics with optional bearer token ---
 // Token is read from `Authorization: Bearer …` only. Accepting it via query
 // string would leak it into access logs, proxy logs, and browser history.
+//
+// Hoist the expected-token Buffer once: env.METRICS_TOKEN is immutable
+// post-boot, and per-request Buffer.from() is wasted work.
+const expectedTokenBuffer: Buffer | null = env.METRICS_TOKEN
+  ? Buffer.from(env.METRICS_TOKEN, 'utf8')
+  : null;
 
 export const metricsAuthMiddleware = (
   req: Request,
   res: Response,
   next: NextFunction,
 ): void => {
-  if (!env.METRICS_TOKEN) {
+  if (!expectedTokenBuffer) {
     next();
     return;
   }
@@ -111,7 +118,15 @@ export const metricsAuthMiddleware = (
     return;
   }
 
-  if (provided !== env.METRICS_TOKEN) {
+  // timingSafeEqual throws on length mismatch — the length comparison is not
+  // a side channel because expectedTokenBuffer.length is fixed at boot time
+  // and reveals nothing the operator doesn't already know.
+  const providedBuffer = Buffer.from(provided, 'utf8');
+  const valid =
+    providedBuffer.length === expectedTokenBuffer.length &&
+    timingSafeEqual(providedBuffer, expectedTokenBuffer);
+
+  if (!valid) {
     res.status(401).json({
       error: { code: 'INVALID_TOKEN', message: 'Invalid METRICS_TOKEN' },
     });

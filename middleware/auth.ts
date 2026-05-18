@@ -2,7 +2,7 @@ import jwt from 'jsonwebtoken';
 import { Response, NextFunction } from 'express';
 import { env } from '../config/env.js';
 import { NoTokenError, InvalidTokenError } from '../errors/index.js';
-import type { JWTPayload, RequestWithLogger } from '../types/index.js';
+import type { RequestWithLogger } from '../types/index.js';
 
 export const auth = (
   req: RequestWithLogger,
@@ -48,19 +48,37 @@ export const auth = (
       return;
     }
 
-    const decoded = jwt.verify(token, env.JWT_SECRET, {
+    // The iss/aud check is gated behind JWT_VERIFY_REQUIRE_CLAIMS during the
+    // grace window: deploy with the flag false so legacy { userId } tokens
+    // issued before the iss/aud rollout still verify; flip to true after a
+    // full 24h-expiry cycle so every in-flight token now carries the new
+    // claims. 5s clockTolerance absorbs small clock drift across instances.
+    const verifyOptions: jwt.VerifyOptions = {
       algorithms: ['HS256'],
-    });
+      clockTolerance: 5,
+      ...(env.JWT_VERIFY_REQUIRE_CLAIMS
+        ? { issuer: env.JWT_ISSUER, audience: env.JWT_AUDIENCE }
+        : {}),
+    };
+    const decoded = jwt.verify(token, env.JWT_SECRET, verifyOptions);
 
-    if (
-      typeof decoded !== 'object' ||
-      decoded === null ||
-      typeof (decoded as { userId?: unknown }).userId !== 'string'
-    ) {
+    if (typeof decoded !== 'object' || decoded === null) {
       throw new Error('Invalid JWT payload');
     }
 
-    const { userId } = decoded as JWTPayload;
+    // Accept the new RFC-7519 `sub` claim and the legacy `userId` field
+    // during the grace window. Reject if neither yields a string.
+    const payload = decoded as { sub?: unknown; userId?: unknown };
+    const userId =
+      typeof payload.sub === 'string'
+        ? payload.sub
+        : typeof payload.userId === 'string'
+          ? payload.userId
+          : undefined;
+    if (userId === undefined) {
+      throw new Error('Invalid JWT payload');
+    }
+
     (req as RequestWithLogger & { userId: string }).userId = userId;
 
     next();

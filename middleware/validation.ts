@@ -63,9 +63,20 @@ export const validateParams = (schema: Schema) => {
   };
 };
 
+// Canonical email schema — NFC + lowercase + trim. The same canonicalization
+// runs in middleware/rateLimiter.ts loginEmailKey and models/User.ts so the
+// rate-limit bucket, validated request, and stored row all key off the same
+// bytes — denies Unicode-variant evasion (NFC vs NFD, full-width, homoglyph).
+const emailSchema = Joi.string()
+  .email()
+  .trim()
+  .lowercase()
+  .custom((value: string) => value.normalize('NFC'))
+  .max(72);
+
 export const schemas = {
   register: Joi.object({
-    email: Joi.string().email().trim().lowercase().max(72).required(),
+    email: emailSchema.required(),
     password: Joi.string()
       .min(8)
       .max(72)
@@ -80,7 +91,7 @@ export const schemas = {
   }),
 
   login: Joi.object({
-    email: Joi.string().email().trim().lowercase().required(),
+    email: emailSchema.required(),
     password: Joi.string().required(),
   }),
 

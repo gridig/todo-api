@@ -34,14 +34,17 @@ const logger = pino({
   // ISO timestamps
   timestamp: pino.stdTimeFunctions.isoTime,
 
-  // Redact sensitive information
+  // Redact sensitive information. `email` is treated as PII (per ROADMAP
+  // cross-cutting concerns) so it does not surface in errorHandler's body log.
   redact: {
     paths: [
       'password',
       'token',
       'authorization',
+      'email',
       '*.password',
       '*.token',
+      '*.email',
       'req.headers.authorization',
       'req.headers.cookie',
     ],

@@ -6,6 +6,7 @@ import jwt from 'jsonwebtoken';
 import crypto from 'crypto';
 import UserService from '../../models/User.js';
 import TodoService from '../../models/Todo.js';
+import { env } from '../../config/env.js';
 
 // Generate a unique ID for test isolation using cryptographic UUID
 export function generateUniqueId(): string {
@@ -35,10 +36,17 @@ export async function createTestUser(
     password: 'TestPass123!',
   });
 
+  // Issue test tokens in the same shape production issues: sub + iss + aud.
+  // Keeps the test suite forward-compatible with JWT_VERIFY_REQUIRE_CLAIMS=true.
   const authToken = jwt.sign(
-    { userId: user.id } as JWTPayload,
-    process.env.JWT_SECRET as string,
-    { expiresIn: '24h' }
+    { sub: user.id } as JWTPayload,
+    env.JWT_SECRET,
+    {
+      expiresIn: '24h',
+      algorithm: 'HS256',
+      issuer: env.JWT_ISSUER,
+      audience: env.JWT_AUDIENCE,
+    }
   );
 
   return { user, authToken, userId: user.id };

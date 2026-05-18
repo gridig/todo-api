@@ -120,7 +120,7 @@ When clustering is enabled, each worker maintains its own database connection po
 
 | Variable             | Type    | Default     | Description                                                                                                                                                                                                                                              |
 | -------------------- | ------- | ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `METRICS_TOKEN`      | String  | `undefined` | Optional bearer token to protect `GET /metrics`. When set, requests must include `Authorization: Bearer <token>` (header-only — query-string `?token=` is **not** accepted, to avoid leaking the secret into access/proxy logs). Required in production. |
+| `METRICS_TOKEN`      | String  | `undefined` | Bearer token to protect `GET /metrics`. When set, requests must include `Authorization: Bearer <token>` (header-only — query-string `?token=` is **not** accepted, to avoid leaking the secret into access/proxy logs). **Required in production** — startup aborts if `NODE_ENV=production` and this is unset or shorter than 32 characters. The comparison is constant-time (`crypto.timingSafeEqual`). |
 | `DISABLE_DB_METRICS` | Boolean | `false`     | When `true`, disables Prisma query-duration instrumentation (`dbQueryDuration`). Use for benchmarks to avoid per-query timer overhead.                                                                                                                   |
 
 **Generating a production token**:
@@ -135,7 +135,7 @@ Store the value in your secrets manager (see `#7.5` in `ROADMAP.md`) and inject 
 
 | Variable             | Type    | Default | Description                                                         |
 | -------------------- | ------- | ------- | ------------------------------------------------------------------- |
-| `DISABLE_RATE_LIMIT` | Boolean | `false` | Disables all rate limiters. Use when running load tests/benchmarks. |
+| `DISABLE_RATE_LIMIT` | Boolean | `false` | Disables all rate limiters. Use when running load tests/benchmarks. **Refused in production** — startup aborts if this is `true` and `NODE_ENV=production`. |
 
 All rate limiters (`auth`, `write`, `read`, `global`, `register`, `health`) emit the IETF `draft-7` `RateLimit-*` response headers (`RateLimit-Limit`, `RateLimit-Remaining`, `RateLimit-Reset`, and `Retry-After` on 429s). Legacy `X-RateLimit-*` headers are not emitted.
 
@@ -145,7 +145,7 @@ The `/health/ready` endpoint is rate-limited at **60 requests/minute/IP** (`heal
 
 | Variable             | Type    | Default                              | Description                                                                                                                                                                                                                                            |
 | -------------------- | ------- | ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `ENABLE_ECHO_ROUTES` | Boolean | `true` in non-prod, `false` in prod  | Mount the `/echo` benchmark routes. `/echo` bypasses logging, rate limiting, and JSON parsing, so it must only be reachable on a benchmark process. The default mirrors `NODE_ENV` so production processes hide it unless this flag is explicitly set. |
+| `ENABLE_ECHO_ROUTES` | Boolean | `true` in non-prod, `false` in prod  | Mount the `/echo` benchmark routes. `/echo` bypasses logging and rate limiting. JSON body parsing now honors `BODY_LIMIT` (was: 100kb library default). The default mirrors `NODE_ENV` so production processes hide it unless this flag is explicitly set. If set true in production, startup logs a loud `WARNING` — intended only for dedicated benchmark processes. |
 
 See [benchmarks.md → Rate Limiting](benchmarks.md#rate-limiting) for the flag combination required when benchmarking against a production-mode process.
 
@@ -233,7 +233,8 @@ The application wires the following defenses in `app.ts`:
 
 - **Helmet** (`helmet()` with defaults) sets the full hardening header set: `Strict-Transport-Security` (HSTS, `max-age=15552000; includeSubDomains`), `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`, `Cross-Origin-Opener-Policy`, `Cross-Origin-Resource-Policy`, and a strict `Content-Security-Policy`. HSTS only takes effect over HTTPS, so it is a no-op in local development and relies on the load balancer terminating TLS in front of the API in production.
 - **`trust proxy = 1`** trusts one upstream proxy hop (ALB / ingress). Required for `req.ip` to reflect the real client IP rather than the proxy, so per-client rate limiting and audit log `sourceIp` are correct.
-- **Echo endpoint (`/echo`)** is gated by `ENABLE_ECHO_ROUTES`, which defaults to `true` in non-production and `false` in production. The endpoint bypasses logging, rate limiting, and JSON parsing, so it must only ever be reachable on a dedicated benchmark process — never on a production instance serving real traffic. See [Debug & Benchmark Routes](#debug--benchmark-routes).
+- **Echo endpoint (`/echo`)** is gated by `ENABLE_ECHO_ROUTES`, which defaults to `true` in non-production and `false` in production. The endpoint bypasses logging and rate limiting (JSON parsing now honours `BODY_LIMIT`), so it must only ever be reachable on a dedicated benchmark process — never on a production instance serving real traffic. To enable in production, pair `ENABLE_ECHO_ROUTES=true` with `ENABLE_ECHO_ROUTES_PRODUCTION_CONFIRM=true`; either flag alone aborts startup. See [Debug & Benchmark Routes](#debug--benchmark-routes).
+- **Readiness probe (`/health/ready`)** is split into a public lean shape (`{ status, timestamp }`) and an authenticated `/health/ready/detailed` route gated by the `METRICS_TOKEN` bearer token. Orchestrators probe the lean path (200/503 + `Retry-After`); operators and dashboards hit `/detailed` for pool/memory/CPU internals. Splitting denies unauthenticated callers the recon signal previously available for DoS targeting. See [API Reference — Health Check](api.md#health-check).
 
 ## Full `.env` Example
 

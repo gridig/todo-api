@@ -59,5 +59,19 @@ describe('Echo Endpoint', () => {
       expect(response.status).toBe(200);
       expect(response.body).toEqual({});
     });
+
+    it('rejects bodies exceeding BODY_LIMIT (16kb default) with 413', async () => {
+      // Previously /echo used express.json() without `limit`, defaulting to
+      // 100kb — bypassing the configured BODY_LIMIT. This test guards the
+      // pass-through of env.BODY_LIMIT to express.json() in routes/echo.ts.
+      const oversizedPayload = { x: 'A'.repeat(20_000) }; // ~20kb > 16kb default
+
+      const response = await request(app)
+        .post('/echo')
+        .set('Content-Type', 'application/json')
+        .send(oversizedPayload);
+
+      expect(response.status).toBe(413);
+    });
   });
 });

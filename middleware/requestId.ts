@@ -14,16 +14,27 @@ const getHeaderValue = (
   return undefined;
 };
 
+// Accept tracing IDs only when they match a safe shape. Node's setHeader
+// already blocks CRLF at runtime, but req.id flows into every log line and
+// into log-aggregator UIs that may render it unsafely (stored-XSS-via-log).
+// Reject anything that isn't an opaque token; fall back to a fresh UUID.
+const REQUEST_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
+
+const sanitizeRequestId = (value: string | undefined): string | undefined =>
+  value !== undefined && REQUEST_ID_PATTERN.test(value) ? value : undefined;
+
 export const requestIdMiddleware = (
   req: RequestWithLogger,
   res: Response,
   next: NextFunction
 ): void => {
-  const incomingCorrelationId = getHeaderValue(req.headers['x-correlation-id']);
+  const incomingCorrelationId = sanitizeRequestId(
+    getHeaderValue(req.headers['x-correlation-id']),
+  );
 
   // Check for existing correlation ID from upstream services
   req.id =
-    getHeaderValue(req.headers['x-request-id']) ||
+    sanitizeRequestId(getHeaderValue(req.headers['x-request-id'])) ||
     incomingCorrelationId ||
     uuidv4();
 

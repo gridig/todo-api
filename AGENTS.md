@@ -197,23 +197,28 @@ For the full testing guide (structure, helpers reference, writing tests, databas
 
 3. **Password handling**
 
-   - Passwords hashed with bcrypt (10 salt rounds) in User model pre-save hook
+   - Passwords hashed with bcrypt (12 salt rounds, OWASP 2024+ floor)
+   - Legacy cost-10 hashes are valid (bcrypt embeds cost in the hash); the login flow opportunistically re-hashes them at the current cost via `UserService.updatePassword`
    - Never store or return plain text passwords
    - Use `user.comparePassword()` method for verification
 
 4. **JWT tokens**
 
-   - 24-hour expiration
+   - 24-hour expiration, HS256 only
+   - Payload carries the standard `sub` claim (subject = user id), plus `iss` and `aud` (set via `JWT_ISSUER` / `JWT_AUDIENCE`)
+   - Verification has 5-second `clockTolerance` for cross-instance drift
+   - `JWT_VERIFY_REQUIRE_CLAIMS=false` during the rollout grace window — `middleware/auth.ts` still accepts legacy `{ userId }` payloads. Flip to `true` ≥24h after deploy; once stable, drop the back-compat branch
    - JWT_SECRET must be strong (32+ characters in production)
    - Tokens validated in `middleware/auth.ts`
 
 5. **Rate limiting**
-   - Global: 200 requests per 15 minutes
-   - Register: 2 requests per hour
-   - Login: 3 failed attempts per 15 minutes
-   - Read operations: 100 per minute
-   - Write operations: 30 per minute
-   - Rate limiting is skipped in test environment only
+   - Global: 200 requests per 15 minutes (per IP)
+   - Register: 2 requests per hour (per IP)
+   - Login per (IP, email): 3 failed attempts per 15 minutes
+   - Login per email: 30 attempts per hour (caps single-account brute-force regardless of source IP)
+   - Read operations: 100 per minute (per IP)
+   - Write operations: 30 per minute (per IP)
+   - Rate limiting is skipped in the `test` environment and when `DISABLE_RATE_LIMIT=true` (which is refused at startup when `NODE_ENV=production`)
 
 ### Input Validation
 

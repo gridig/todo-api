@@ -40,7 +40,10 @@ services:
       NODE_ENV: production
       PORT: 3001
       DATABASE_URL: postgresql://postgres:postgres@postgres:5432/todo_api
-      JWT_SECRET: docker-compose-dev-secret-change-in-production-min-32-chars
+      # Read JWT_SECRET from the host environment (export it or define it in .env).
+      # Fails compose-up with a clear error if unset — refuses to silently ship
+      # a publicly-known placeholder secret alongside NODE_ENV=production.
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET must be set in your shell or .env (>=32 chars)}
       LOG_LEVEL: info
       # REDIS_URL: redis://redis:6379  # Uncomment when distributed rate limiting is implemented (#13)
     depends_on:

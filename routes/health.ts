@@ -7,6 +7,7 @@ import {
   probeDatabase,
 } from '../lib/prisma.js';
 import { healthLimiter } from '../middleware/rateLimiter.js';
+import { metricsAuthMiddleware } from '../middleware/metrics.js';
 import type { RequestWithLogger } from '../types/index.js';
 
 const router: Router = express.Router();
@@ -40,17 +41,22 @@ router.get('/', (req: RequestWithLogger, res: Response) => {
   });
 });
 
-// Readiness probe - is the server ready to handle requests?
-router.get('/ready', healthLimiter, async (req: RequestWithLogger, res: Response) => {
-  const uptime = Math.floor((Date.now() - startTime) / 1000);
-  const { log } = req;
+// Build the rich readiness payload. Extracted so /ready and /ready/detailed
+// share the underlying probe + assembly logic; the two endpoints differ only
+// in which slice of this payload reaches the wire.
+interface ReadinessOutcome {
+  isReady: boolean;
+  isDatabaseReady: boolean;
+  payload: Record<string, unknown>;
+}
 
-  // Check PostgreSQL connection via the dedicated probe pool (insulated from
-  // application pool exhaustion; bounded by DB_PROBE_TIMEOUT_MS so probe
-  // latency stays well under k8s readiness/liveness timeoutSeconds).
+async function buildReadinessPayload(
+  log: RequestWithLogger['log'],
+): Promise<ReadinessOutcome> {
+  const uptime = Math.floor((Date.now() - startTime) / 1000);
+
   let isDatabaseReady = false;
   let databaseState: string;
-
   try {
     await probeDatabase();
     isDatabaseReady = true;
@@ -60,12 +66,10 @@ router.get('/ready', healthLimiter, async (req: RequestWithLogger, res: Response
     log.error({ err: error }, 'Database health check failed');
   }
 
-  // Check memory usage
   const memoryUsage = process.memoryUsage();
   const heapUsedPercent = (memoryUsage.heapUsed / memoryUsage.heapTotal) * 100;
   const isMemoryOk = heapUsedPercent < MEMORY_THRESHOLD_PERCENT;
 
-  // Check CPU load (1-minute average)
   const loadAverage = os.loadavg();
   const cpuCount = os.cpus().length;
   const load1m = loadAverage[0] ?? 0;
@@ -73,13 +77,10 @@ router.get('/ready', healthLimiter, async (req: RequestWithLogger, res: Response
   const load15m = loadAverage[2] ?? 0;
   const isCpuOk = load1m < CPU_LOAD_THRESHOLD;
 
-  // Pool state — three-valued status. Saturation IS a readiness failure:
-  // "Postgres reachable" is a weaker signal than "the server can serve a
-  // request right now." If every connection is busy, the pool has fully
-  // grown, and clients are already queued, the next incoming request has to
-  // wait — that's degraded readiness regardless of DB connectivity. Use
-  // integer comparisons against canonical pg.Pool counters (no float
-  // rounding); `utilization` stays the display metric.
+  // Saturation IS a readiness failure: a reachable DB but a full pool with
+  // queued clients means the next request has to wait. Memory and CPU stay
+  // observational — load lingers ~60s after a burst; OOM is a liveness
+  // concern, not readiness.
   const poolMetrics = getPoolMetrics();
   const isPoolSaturated =
     poolMetrics.idleConnections === 0 &&
@@ -91,13 +92,9 @@ router.get('/ready', healthLimiter, async (req: RequestWithLogger, res: Response
       ? 'warning'
       : 'ok';
 
-  // Overall readiness only tracks binding constraints: can we reach the DB,
-  // and does the pool have headroom to serve another request? Memory and CPU
-  // are observational — load average lingers ~60s after a burst and would
-  // otherwise spam WARN per probe; OOM is a liveness concern, not readiness.
   const isReady = isDatabaseReady && !isPoolSaturated;
 
-  const healthStatus = {
+  const payload = {
     status: isReady ? 'ok' : 'degraded',
     timestamp: new Date().toISOString(),
     uptime,
@@ -138,20 +135,59 @@ router.get('/ready', healthLimiter, async (req: RequestWithLogger, res: Response
     },
   };
 
-  if (!isReady) {
-    log.warn(healthStatus, 'Health check - readiness probe failed');
-  } else {
-    log.debug(healthStatus, 'Health check - readiness probe passed');
-  }
+  return { isReady, isDatabaseReady, payload };
+}
 
-  if (!isReady) {
-    // Pool saturation typically resolves in seconds (queue drains as queries
-    // complete); a DB outage typically takes longer. Use a shorter hint for
-    // the recoverable case so clients retry sooner.
-    res.setHeader('Retry-After', isDatabaseReady ? '5' : '30');
-  }
+// Set the Retry-After hint for degraded responses. Pool saturation typically
+// resolves in seconds (queue drains as queries complete); a DB outage
+// typically takes longer — shorter hint for the recoverable case.
+function setRetryAfter(res: Response, isDatabaseReady: boolean): void {
+  res.setHeader('Retry-After', isDatabaseReady ? '5' : '30');
+}
 
-  res.status(isReady ? 200 : 503).json(healthStatus);
-});
+// Public readiness probe — lean response for orchestrators (k8s, ALB).
+// Returns only `{ status, timestamp }` plus 200/503; rich pool/CPU/memory
+// internals live behind /ready/detailed so unauthenticated callers cannot
+// recon process-internal load for DoS targeting. See security-audit-2026-05-18.md.
+router.get(
+  '/ready',
+  healthLimiter,
+  async (req: RequestWithLogger, res: Response) => {
+    const { log } = req;
+    const { isReady, isDatabaseReady, payload } =
+      await buildReadinessPayload(log);
+
+    if (!isReady) {
+      log.warn(payload, 'Health check - readiness probe failed');
+      setRetryAfter(res, isDatabaseReady);
+    } else {
+      log.debug(payload, 'Health check - readiness probe passed');
+    }
+
+    res.status(isReady ? 200 : 503).json({
+      status: payload.status,
+      timestamp: payload.timestamp,
+    });
+  },
+);
+
+// Authenticated detailed readiness — same gate as /metrics (METRICS_TOKEN
+// bearer). Used by operators and dashboards; not by orchestrators.
+router.get(
+  '/ready/detailed',
+  healthLimiter,
+  metricsAuthMiddleware,
+  async (req: RequestWithLogger, res: Response) => {
+    const { log } = req;
+    const { isReady, isDatabaseReady, payload } =
+      await buildReadinessPayload(log);
+
+    if (!isReady) {
+      setRetryAfter(res, isDatabaseReady);
+    }
+
+    res.status(isReady ? 200 : 503).json(payload);
+  },
+);
 
 export default router;

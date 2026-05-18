@@ -5,12 +5,27 @@ import type { CorsOptions } from 'cors';
 /**
  * Parse comma-separated origin string into array
  * Returns '*' if origin is set to wildcard
+ *
+ * Rejects mixed wildcard+list (e.g. "*,https://app.example.com") at parse time
+ * — the validator below treats array entries by `.includes(origin)`, so a
+ * literal '*' entry never matches any real origin and silently breaks CORS
+ * for every operator-allowed client.
  */
-const parseOrigins = (originString: string): string | string[] => {
-  if (originString.trim() === '*') {
+export const parseOrigins = (originString: string): string | string[] => {
+  const trimmed = originString.trim();
+  if (trimmed === '*') {
     return '*';
   }
-  return originString.split(',').map((origin) => origin.trim());
+  const entries = trimmed
+    .split(',')
+    .map((origin) => origin.trim())
+    .filter((origin) => origin.length > 0);
+  if (entries.includes('*')) {
+    throw new Error(
+      'CORS_ORIGIN cannot mix the wildcard "*" with an explicit list — use one or the other',
+    );
+  }
+  return entries;
 };
 
 /**
@@ -20,7 +35,7 @@ const parseOrigins = (originString: string): string | string[] => {
 
 type OriginCallback = (err: Error | null, origin?: boolean) => void;
 
-const createOriginValidator = (
+export const createOriginValidator = (
   allowedOrigins: string | string[],
   allowNoOrigin: boolean,
 ): CorsOptions['origin'] => {

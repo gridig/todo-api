@@ -31,6 +31,14 @@ interface JsonParseError extends SyntaxError {
   status: number;
 }
 
+// body-parser PayloadTooLargeError surfaces here when express.json's `limit`
+// is exceeded. The error carries `type: 'entity.too.large'` and `status: 413`.
+interface PayloadTooLargeError extends Error {
+  type: string;
+  status: number;
+  statusCode: number;
+}
+
 const hasCode = (error: unknown): error is CodedError => {
   return typeof error === 'object' && error !== null && 'code' in error;
 };
@@ -41,6 +49,15 @@ const isJsonParseError = (error: unknown): error is JsonParseError => {
     'status' in error &&
     (error as JsonParseError).status === 400 &&
     'body' in error
+  );
+};
+
+const isPayloadTooLargeError = (error: unknown): error is PayloadTooLargeError => {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    'type' in error &&
+    (error as PayloadTooLargeError).type === 'entity.too.large'
   );
 };
 
@@ -153,6 +170,21 @@ export const errorHandler = (
         message: 'Invalid JSON in request body',
         details: {
           suggestion: 'Ensure your request body contains valid JSON',
+        },
+      },
+      requestId,
+    });
+    return;
+  }
+
+  // Handle body-parser PayloadTooLargeError (BODY_LIMIT exceeded) → 413
+  if (isPayloadTooLargeError(err)) {
+    res.status(413).json({
+      error: {
+        code: 'PAYLOAD_TOO_LARGE',
+        message: 'Request body exceeds the configured size limit',
+        details: {
+          suggestion: 'Reduce the request body size and retry',
         },
       },
       requestId,

@@ -47,6 +47,21 @@ export const env = cleanEnv(process.env, {
     example: 'your-super-secret-jwt-key-min-32-chars',
   }),
 
+  JWT_ISSUER: str({
+    default: 'todo-api',
+    desc: 'JWT `iss` claim. Set both sign and verify sides to the same value.',
+  }),
+
+  JWT_AUDIENCE: str({
+    default: 'todo-api-clients',
+    desc: 'JWT `aud` claim. Set both sign and verify sides to the same value.',
+  }),
+
+  JWT_VERIFY_REQUIRE_CLAIMS: bool({
+    default: false,
+    desc: 'When true, jwt.verify rejects tokens lacking iss/aud claims. Flip to true at least one full 24h-expiry window after the rollout deploy so legacy tokens have aged out. Until then, verify accepts both legacy { userId } and new { sub, iss, aud } payloads.',
+  }),
+
   // CORS Configuration
   CORS_ORIGIN: str({
     // No default: the app must fail fast on a missing CORS policy rather than
@@ -63,7 +78,10 @@ export const env = cleanEnv(process.env, {
   }),
 
   CORS_METHODS: str({
-    default: 'GET,HEAD,PUT,PATCH,POST,DELETE',
+    // Only methods actually mounted by the API. Extend explicitly per
+    // environment if a future route uses PUT/OPTIONS beyond the cors package's
+    // built-in preflight handling.
+    default: 'GET,HEAD,POST,PATCH,DELETE',
     desc: 'Allowed HTTP methods in CORS requests',
   }),
 
@@ -102,7 +120,12 @@ export const env = cleanEnv(process.env, {
 
   ENABLE_ECHO_ROUTES: bool({
     default: process.env.NODE_ENV !== 'production',
-    desc: 'Expose the /echo benchmark routes (no logging, no rate limiting, no body parsing). Defaults to true in non-production, false in production. Set to true in production only on a dedicated benchmark process — never on an instance serving real traffic.',
+    desc: 'Expose the /echo benchmark routes (no logging, no rate limiting). Defaults to true in non-production, false in production. To enable in production, pair with ENABLE_ECHO_ROUTES_PRODUCTION_CONFIRM=true — otherwise startup aborts.',
+  }),
+
+  ENABLE_ECHO_ROUTES_PRODUCTION_CONFIRM: bool({
+    default: false,
+    desc: 'Confirmation flag required to enable ENABLE_ECHO_ROUTES in production. Both must be true; either alone fails startup. Document the dedicated-benchmark-process intent in your deploy runbook before flipping these.',
   }),
 
   // Shutdown Configuration
@@ -196,3 +219,73 @@ export const env = cleanEnv(process.env, {
     desc: 'ms to keep idle keep-alive connections open. Must exceed load balancer idle timeout (typically 60s) to avoid mid-flight 502s.',
   }),
 });
+
+// Production-mode hardening: refuse to boot when a security-sensitive flag is
+// in a state that would be a regression in production. cleanEnv() handles the
+// per-variable validation; this is cross-cutting policy. Exported as a pure
+// function so the rules can be unit-tested with synthetic env shapes without
+// spawning a child process for every case.
+//
+// Writing to stderr (not the logger) below because middleware/logger.ts
+// imports this module — using the logger would create an import cycle.
+
+export const METRICS_TOKEN_MIN_LENGTH = 32;
+
+export interface ProductionAssertionInput {
+  NODE_ENV: string;
+  METRICS_TOKEN?: string | undefined;
+  DISABLE_RATE_LIMIT: boolean;
+  ENABLE_ECHO_ROUTES: boolean;
+  ENABLE_ECHO_ROUTES_PRODUCTION_CONFIRM: boolean;
+  CORS_ORIGIN: string;
+  CORS_CREDENTIALS: string;
+}
+
+export interface ProductionAssertionResult {
+  errors: string[];
+  warnings: string[];
+}
+
+export function assertProductionEnv(
+  cfg: ProductionAssertionInput,
+): ProductionAssertionResult {
+  const errors: string[] = [];
+  const warnings: string[] = [];
+
+  if (cfg.NODE_ENV !== 'production') return { errors, warnings };
+
+  if (!cfg.METRICS_TOKEN || cfg.METRICS_TOKEN.length < METRICS_TOKEN_MIN_LENGTH) {
+    errors.push(
+      `METRICS_TOKEN is required in production and must be at least ${METRICS_TOKEN_MIN_LENGTH} characters`,
+    );
+  }
+  if (cfg.DISABLE_RATE_LIMIT) {
+    errors.push('DISABLE_RATE_LIMIT must not be true in production');
+  }
+  if (cfg.CORS_ORIGIN.trim() === '*' && cfg.CORS_CREDENTIALS === 'true') {
+    errors.push(
+      'CORS_ORIGIN="*" is incompatible with CORS_CREDENTIALS=true (browsers refuse the combination)',
+    );
+  }
+  if (cfg.ENABLE_ECHO_ROUTES && !cfg.ENABLE_ECHO_ROUTES_PRODUCTION_CONFIRM) {
+    errors.push(
+      'ENABLE_ECHO_ROUTES=true in production requires ENABLE_ECHO_ROUTES_PRODUCTION_CONFIRM=true (confirms this is a dedicated benchmark process, not user-serving)',
+    );
+  } else if (cfg.ENABLE_ECHO_ROUTES && cfg.ENABLE_ECHO_ROUTES_PRODUCTION_CONFIRM) {
+    warnings.push(
+      'ENABLE_ECHO_ROUTES=true in production with CONFIRM. /echo bypasses logging and rate limiting — this process must not serve real traffic.',
+    );
+  }
+
+  return { errors, warnings };
+}
+
+const { errors: prodErrors, warnings: prodWarnings } = assertProductionEnv(env);
+for (const w of prodWarnings) {
+  process.stderr.write(`WARNING: ${w}\n`);
+}
+if (prodErrors.length > 0) {
+  throw new Error(
+    `Invalid production configuration:\n  - ${prodErrors.join('\n  - ')}`,
+  );
+}

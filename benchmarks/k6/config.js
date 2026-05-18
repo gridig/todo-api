@@ -18,7 +18,8 @@ export const LOAD_LEVELS = {
     },
   },
   medium: {
-    vus: 50,
+    vus: 100,
+    maxVUs: 300,
     duration: '60s',
     rps: 300,
     thresholds: {
@@ -27,7 +28,8 @@ export const LOAD_LEVELS = {
     },
   },
   high: {
-    vus: 200,
+    vus: 500,
+    maxVUs: 1200,
     duration: '60s',
     rps: 1000,
     thresholds: {
@@ -40,10 +42,10 @@ export const LOAD_LEVELS = {
     },
   },
   overload: {
-    vus: 500,
+    vus: 1500,
+    maxVUs: 4000,
     duration: '60s',
     rps: 3000,
-    maxVUs: 1500,
     thresholds: {},
   },
 };

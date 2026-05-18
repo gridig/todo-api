@@ -12,8 +12,10 @@ import {
   pool,
 } from '../../lib/prisma.js';
 import logger from '../../middleware/logger.js';
+import { env } from '../../config/env.js';
 
 const app = createTestApp();
+const bearer = `Bearer ${env.METRICS_TOKEN}`;
 
 describe('Database Pool Observability', () => {
   beforeAll(async () => {
@@ -50,9 +52,11 @@ describe('Database Pool Observability', () => {
     });
   });
 
-  describe('GET /health/ready — pool check', () => {
+  describe('GET /health/ready/detailed — pool check', () => {
     it('includes checks.pool with the expected fields', async () => {
-      const response = await request(app).get('/health/ready');
+      const response = await request(app)
+        .get('/health/ready/detailed')
+        .set('Authorization', bearer);
 
       expect(response.status).toBe(200);
       expect(response.body.checks.pool).toEqual({
@@ -80,7 +84,9 @@ describe('Database Pool Observability', () => {
         .mockReturnValue(7);
 
       try {
-        const response = await request(app).get('/health/ready');
+        const response = await request(app)
+          .get('/health/ready/detailed')
+          .set('Authorization', bearer);
 
         expect(response.status).toBe(503);
         expect(response.headers['retry-after']).toBe('5');
@@ -115,7 +121,9 @@ describe('Database Pool Observability', () => {
         .mockReturnValue(0);
 
       try {
-        const response = await request(app).get('/health/ready');
+        const response = await request(app)
+          .get('/health/ready/detailed')
+          .set('Authorization', bearer);
 
         expect(response.status).toBe(200);
         expect(response.body.status).toBe('ok');
@@ -141,7 +149,9 @@ describe('Database Pool Observability', () => {
         .mockReturnValue(3);
 
       try {
-        const response = await request(app).get('/health/ready');
+        const response = await request(app)
+          .get('/health/ready/detailed')
+          .set('Authorization', bearer);
 
         // total (2) < max (whatever DB_POOL_MAX is, usually 10) → pool can
         // still grow → not saturated → still ready.
@@ -156,7 +166,7 @@ describe('Database Pool Observability', () => {
 
   describe('GET /metrics — pool gauges', () => {
     it('exposes the four db_pool_* gauges', async () => {
-      const response = await request(app).get('/metrics');
+      const response = await request(app).get('/metrics').set('Authorization', bearer);
 
       expect(response.status).toBe(200);
       expect(response.text).toContain('db_pool_total_connections');

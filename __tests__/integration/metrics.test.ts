@@ -5,8 +5,10 @@ import {
   disconnectTestDB,
 } from '../helpers/testSetup.js';
 import { register } from '../../middleware/metrics.js';
+import { env } from '../../config/env.js';
 
 const app = createTestApp();
+const bearer = `Bearer ${env.METRICS_TOKEN}`;
 
 describe('Metrics Endpoint', () => {
   beforeAll(async () => {
@@ -23,7 +25,7 @@ describe('Metrics Endpoint', () => {
 
   describe('GET /metrics', () => {
     it('should return 200 with Prometheus text format', async () => {
-      const response = await request(app).get('/metrics');
+      const response = await request(app).get('/metrics').set('Authorization', bearer);
 
       expect(response.status).toBe(200);
       expect(response.headers['content-type']).toMatch(
@@ -41,7 +43,7 @@ describe('Metrics Endpoint', () => {
       // in `middleware/metrics.ts` to prevent prom-client's setInterval samplers
       // from firing after Jest tears down the VM. The metrics are emitted normally
       // in development and production.
-      const response = await request(app).get('/metrics');
+      const response = await request(app).get('/metrics').set('Authorization', bearer);
 
       expect(response.text).not.toContain('process_cpu_');
       expect(response.text).not.toContain('nodejs_heap_size_total_bytes');
@@ -51,7 +53,7 @@ describe('Metrics Endpoint', () => {
     it('should not be rate limited', async () => {
       // Fire multiple requests rapidly - should all succeed
       const requests = Array.from({ length: 10 }, () =>
-        request(app).get('/metrics'),
+        request(app).get('/metrics').set('Authorization', bearer),
       );
       const responses = await Promise.all(requests);
 
@@ -64,7 +66,7 @@ describe('Metrics Endpoint', () => {
       // Make a health check request to generate metrics
       await request(app).get('/health');
 
-      const response = await request(app).get('/metrics');
+      const response = await request(app).get('/metrics').set('Authorization', bearer);
 
       expect(response.text).toMatch(
         /http_requests_total\{[^}]*method="GET"[^}]*route="\/health"[^}]*\}\s+\d+/,
