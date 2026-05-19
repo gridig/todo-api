@@ -218,7 +218,7 @@ For the full testing guide (structure, helpers reference, writing tests, databas
    - Login per email: 30 attempts per hour (caps single-account brute-force regardless of source IP)
    - Read operations: 100 per minute (per IP)
    - Write operations: 30 per minute (per IP)
-   - Rate limiting is skipped in the `test` environment and when `DISABLE_RATE_LIMIT=true` (which is refused at startup when `NODE_ENV=production`)
+   - Rate limiting is skipped in the `test` environment and when `DISABLE_RATE_LIMIT=true`. In production (`NODE_ENV=production`) the latter requires the paired `DISABLE_RATE_LIMIT_PRODUCTION_CONFIRM=true` flag — startup aborts otherwise. Use only on a dedicated benchmark process.
 
 ### Input Validation
 

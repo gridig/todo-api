@@ -18,12 +18,12 @@ const pool = new Pool({
 // Pool events — frequencies vary wildly, so log levels do too.
 //   acquire/release: one per query → debug (silent in prod by default)
 //   connect:         pool warmup / replacement → debug
-//   remove:          connection evicted/closed → warn (rare; worth seeing)
+//   remove:          idle connection reaped past DB_IDLE_TIMEOUT_MS → debug
 //   error:           idle-client error → error
 pool.on('connect', () => logger.debug('pg pool: connect'));
 pool.on('acquire', () => logger.debug('pg pool: acquire'));
 pool.on('release', () => logger.debug('pg pool: release'));
-pool.on('remove', () => logger.warn('pg pool: remove'));
+pool.on('remove', () => logger.debug('pg pool: remove'));
 pool.on('error', (err) => logger.error({ err }, 'pg pool: idle client error'));
 
 // Dedicated probe pool — single warm connection reserved for /health/ready.

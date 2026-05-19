@@ -115,7 +115,12 @@ export const env = cleanEnv(process.env, {
 
   DISABLE_RATE_LIMIT: bool({
     default: false,
-    desc: 'Disable rate limiting',
+    desc: 'Disable rate limiting. To enable in production, pair with DISABLE_RATE_LIMIT_PRODUCTION_CONFIRM=true — otherwise startup aborts.',
+  }),
+
+  DISABLE_RATE_LIMIT_PRODUCTION_CONFIRM: bool({
+    default: false,
+    desc: 'Confirmation flag required to set DISABLE_RATE_LIMIT=true in production. Both must be true; either alone fails startup. Document the dedicated-benchmark-process intent in your deploy runbook before flipping these.',
   }),
 
   ENABLE_ECHO_ROUTES: bool({
@@ -235,6 +240,7 @@ export interface ProductionAssertionInput {
   NODE_ENV: string;
   METRICS_TOKEN?: string | undefined;
   DISABLE_RATE_LIMIT: boolean;
+  DISABLE_RATE_LIMIT_PRODUCTION_CONFIRM: boolean;
   ENABLE_ECHO_ROUTES: boolean;
   ENABLE_ECHO_ROUTES_PRODUCTION_CONFIRM: boolean;
   CORS_ORIGIN: string;
@@ -259,8 +265,14 @@ export function assertProductionEnv(
       `METRICS_TOKEN is required in production and must be at least ${METRICS_TOKEN_MIN_LENGTH} characters`,
     );
   }
-  if (cfg.DISABLE_RATE_LIMIT) {
-    errors.push('DISABLE_RATE_LIMIT must not be true in production');
+  if (cfg.DISABLE_RATE_LIMIT && !cfg.DISABLE_RATE_LIMIT_PRODUCTION_CONFIRM) {
+    errors.push(
+      'DISABLE_RATE_LIMIT=true in production requires DISABLE_RATE_LIMIT_PRODUCTION_CONFIRM=true (confirms this is a dedicated benchmark process, not user-serving)',
+    );
+  } else if (cfg.DISABLE_RATE_LIMIT && cfg.DISABLE_RATE_LIMIT_PRODUCTION_CONFIRM) {
+    warnings.push(
+      'DISABLE_RATE_LIMIT=true in production with CONFIRM. Every limiter (global, auth, register, read, write, health) is bypassed — this process must not serve real traffic.',
+    );
   }
   if (cfg.CORS_ORIGIN.trim() === '*' && cfg.CORS_CREDENTIALS === 'true') {
     errors.push(

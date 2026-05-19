@@ -8,6 +8,7 @@ const baseProdCfg = (
   NODE_ENV: 'production',
   METRICS_TOKEN: STRONG_TOKEN,
   DISABLE_RATE_LIMIT: false,
+  DISABLE_RATE_LIMIT_PRODUCTION_CONFIRM: false,
   ENABLE_ECHO_ROUTES: false,
   ENABLE_ECHO_ROUTES_PRODUCTION_CONFIRM: false,
   CORS_ORIGIN: 'https://example.com',
@@ -36,10 +37,27 @@ describe('assertProductionEnv', () => {
     );
   });
 
-  it('flags DISABLE_RATE_LIMIT=true in production', () => {
+  it('errors when DISABLE_RATE_LIMIT=true without the confirmation flag', () => {
     const result = assertProductionEnv(baseProdCfg({ DISABLE_RATE_LIMIT: true }));
     expect(result.errors).toEqual(
-      expect.arrayContaining([expect.stringMatching(/DISABLE_RATE_LIMIT/)]),
+      expect.arrayContaining([
+        expect.stringMatching(/DISABLE_RATE_LIMIT_PRODUCTION_CONFIRM=true/),
+      ]),
+    );
+  });
+
+  it('accepts DISABLE_RATE_LIMIT=true paired with the confirmation flag (warning only)', () => {
+    const result = assertProductionEnv(
+      baseProdCfg({
+        DISABLE_RATE_LIMIT: true,
+        DISABLE_RATE_LIMIT_PRODUCTION_CONFIRM: true,
+      }),
+    );
+    expect(result.errors).toEqual([]);
+    expect(result.warnings).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(/DISABLE_RATE_LIMIT=true in production with CONFIRM/),
+      ]),
     );
   });
 

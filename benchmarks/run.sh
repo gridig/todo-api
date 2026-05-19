@@ -1,6 +1,24 @@
 #!/usr/bin/env bash
 set -uo pipefail
 
+# Auto-load .env into the bench shell if present. The server's dotenv loader
+# already does this for its own process; mirror it here so a developer who
+# just ran `pnpm bench:all` doesn't have to also `source .env` to make
+# METRICS_TOKEN visible to the curl in capture_server_metrics(). Inline env
+# vars on the command line take precedence (set -a only injects missing keys
+# when `source` reads variables already exported in the parent shell).
+if [[ -z "${METRICS_TOKEN:-}" && -f .env ]]; then
+  set -a
+  # shellcheck disable=SC1091
+  source .env
+  set +a
+fi
+
+if [[ -z "${METRICS_TOKEN:-}" ]]; then
+  echo "Warning: METRICS_TOKEN is not set — /metrics scraping will fail (401)." >&2
+  echo "         Pass it inline (METRICS_TOKEN=... pnpm bench:all) or add it to .env." >&2
+fi
+
 BASE_URL="${BASE_URL:-http://localhost:3001}"
 COOLDOWN="${COOLDOWN:-10}"
 RESULTS_DIR="benchmarks/results"
@@ -28,7 +46,13 @@ echo ""
 capture_server_metrics() {
   local label="$1"
   local file="$RESULTS_DIR/${label}-server-metrics.txt"
-  curl -sf "$BASE_URL/metrics" > "$file" 2>/dev/null || echo "Warning: Could not capture server metrics" >&2
+  if [[ -n "${METRICS_TOKEN:-}" ]]; then
+    curl -sf -H "Authorization: Bearer $METRICS_TOKEN" "$BASE_URL/metrics" > "$file" 2>/dev/null \
+      || echo "Warning: Could not capture server metrics" >&2
+  else
+    curl -sf "$BASE_URL/metrics" > "$file" 2>/dev/null \
+      || echo "Warning: Could not capture server metrics" >&2
+  fi
 }
 
 run_bench() {
