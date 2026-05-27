@@ -6,7 +6,12 @@ export class AppError extends Error {
   details: Record<string, unknown> | null;
   isOperational: boolean;
 
-  constructor(message: string, statusCode: number, code: string, details: Record<string, unknown> | null = null) {
+  constructor(
+    message: string,
+    statusCode: number,
+    code: string,
+    details: Record<string, unknown> | null = null,
+  ) {
     super(message);
     this.name = this.constructor.name;
     this.statusCode = statusCode;
@@ -33,7 +38,7 @@ export class AuthError extends AppError {
   constructor(
     message: string = 'Authentication failed',
     code: string = 'AUTH_ERROR',
-    details: Record<string, unknown> | null = null
+    details: Record<string, unknown> | null = null,
   ) {
     super(message, 401, code, details);
   }
@@ -65,7 +70,10 @@ export class InvalidTokenError extends AuthError {
 
 // Validation errors
 export class ValidationError extends AppError {
-  constructor(message:string = 'Validation failed', details: Record<string, unknown> | null = null) {
+  constructor(
+    message: string = 'Validation failed',
+    details: Record<string, unknown> | null = null,
+  ) {
     super(message, 400, 'VALIDATION_ERROR', details);
   }
 }
@@ -84,7 +92,7 @@ export class ForbiddenError extends AppError {
   constructor(
     message: string = 'Access denied',
     code: string = 'FORBIDDEN',
-    details: Record<string, unknown> | null = null
+    details: Record<string, unknown> | null = null,
   ) {
     super(message, 403, code, details);
   }
@@ -95,7 +103,7 @@ export class ConflictError extends AppError {
   constructor(
     message: string = 'Conflict',
     code: string = 'CONFLICT',
-    details: Record<string, unknown> | null = null
+    details: Record<string, unknown> | null = null,
   ) {
     super(message, 409, code, details);
   }
@@ -111,11 +119,10 @@ export class DuplicateEmailError extends ConflictError {
 
 export class DuplicateValueError extends ConflictError {
   constructor(field: string) {
-    super(
-      `${field.charAt(0).toUpperCase() + field.slice(1)} already exists`,
-      'DUPLICATE_VALUE',
-      { field, suggestion: `Please use a different ${field}` },
-    );
+    super(`${field.charAt(0).toUpperCase() + field.slice(1)} already exists`, 'DUPLICATE_VALUE', {
+      field,
+      suggestion: `Please use a different ${field}`,
+    });
   }
 }
 
@@ -168,8 +175,7 @@ export class RouteNotFoundError extends NotFoundError {
 export class InternalServerError extends AppError {
   constructor(message: string = 'An unexpected error occurred') {
     super(message, 500, 'INTERNAL_ERROR', {
-      suggestion:
-        'Please try again later or contact support if the issue persists',
+      suggestion: 'Please try again later or contact support if the issue persists',
     });
   }
 }

@@ -42,9 +42,7 @@ const probePool = new Pool({
   query_timeout: env.DB_PROBE_TIMEOUT_MS,
 });
 
-probePool.on('error', (err) =>
-  logger.error({ err }, 'pg probe pool: idle client error'),
-);
+probePool.on('error', (err) => logger.error({ err }, 'pg probe pool: idle client error'));
 
 export async function probeDatabase(): Promise<void> {
   await probePool.query('SELECT 1');
@@ -102,8 +100,7 @@ export function getPoolMetrics(): PoolMetrics {
   const waitingClients = pool.waitingCount;
   const maxConnections = env.DB_POOL_MAX;
   const active = totalConnections - idleConnections;
-  const utilization =
-    maxConnections > 0 ? (active / maxConnections) * 100 : 0;
+  const utilization = maxConnections > 0 ? (active / maxConnections) * 100 : 0;
   return {
     totalConnections,
     idleConnections,
@@ -135,9 +132,14 @@ const basePrisma = new PrismaClient({
   log: env.NODE_ENV === 'development' ? ['query', 'error', 'warn'] : ['error'],
 });
 
-const prisma = env.DISABLE_DB_METRICS
+// Cast back to PrismaClient: $extends produces a DynamicClientExtensionThis
+// type whose generics defeat $transaction overload resolution at downstream
+// callsites (TS picks the PrismaPromise[] overload instead of the callback
+// one). The extension only adds query-time instrumentation, no new model
+// fields, so the narrower type is still accurate at runtime.
+const prisma: PrismaClient = env.DISABLE_DB_METRICS
   ? basePrisma
-  : basePrisma.$extends({
+  : (basePrisma.$extends({
       query: {
         $allOperations({ operation, model, args, query }) {
           const end = dbQueryDuration.startTimer({
@@ -147,7 +149,7 @@ const prisma = env.DISABLE_DB_METRICS
           return query(args).finally(() => end());
         },
       },
-    });
+    }) as unknown as PrismaClient);
 
 export { pool, probePool };
 export default prisma;

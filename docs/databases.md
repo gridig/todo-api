@@ -166,8 +166,7 @@ elasticsearch:
   volumes:
     - elasticsearch_data:/usr/share/elasticsearch/data
   healthcheck:
-    test:
-      ['CMD-SHELL', 'curl -f http://localhost:9200/_cluster/health || exit 1']
+    test: ['CMD-SHELL', 'curl -f http://localhost:9200/_cluster/health || exit 1']
     interval: 10s
     timeout: 5s
     retries: 5
@@ -471,10 +470,7 @@ A middleware mounted in [`app.ts`](../app.ts) right after [`middleware/requestId
 
 ```typescript
 // lib/auditLog.ts — single write() method, no update/delete/batch
-import type {
-  Prisma,
-  PrismaClient,
-} from '../prisma/generated/prisma/client.js';
+import type { Prisma, PrismaClient } from '../prisma/generated/prisma/client.js';
 import { getRequestContext } from './requestContext.js';
 
 type Tx = PrismaClient | Prisma.TransactionClient;
@@ -672,11 +668,7 @@ async toggleDone({ id, userId }) {
 ```typescript
 // services/search.ts
 export class SearchService {
-  async search(
-    userId: string,
-    query: string,
-    options: SearchOptions,
-  ): Promise<SearchResult> {
+  async search(userId: string, query: string, options: SearchOptions): Promise<SearchResult> {
     try {
       return await this.elasticsearchSearch(userId, query, options);
     } catch (error) {
@@ -685,11 +677,7 @@ export class SearchService {
     }
   }
 
-  private async elasticsearchSearch(
-    userId: string,
-    query: string,
-    options: SearchOptions,
-  ) {
+  private async elasticsearchSearch(userId: string, query: string, options: SearchOptions) {
     const response = await esClient.search({
       index: 'unified_search',
       body: {
@@ -711,11 +699,7 @@ export class SearchService {
     return { hits: response.hits, facets: response.aggregations, mode: 'full' };
   }
 
-  private async pgTrigramSearch(
-    userId: string,
-    query: string,
-    options: SearchOptions,
-  ) {
+  private async pgTrigramSearch(userId: string, query: string, options: SearchOptions) {
     const results = await prisma.$queryRaw`
       SELECT * FROM "Todo"
       WHERE "userId" = ${userId} AND similarity(text, ${query}) > 0.3

@@ -57,11 +57,11 @@ describe('Rate Limiter Middleware', () => {
             limitType: type,
             userAgent: 'test-agent',
           }),
-          `Rate limit exceeded - ${type}`
+          `Rate limit exceeded - ${type}`,
         );
         expect(res.status).toHaveBeenCalledWith(429);
         expect(res.json).toHaveBeenCalledWith(options.message);
-      }
+      },
     );
 
     it('should use module logger when req.log is not available', () => {
@@ -76,12 +76,10 @@ describe('Rate Limiter Middleware', () => {
   });
 
   describe('loginEmailKey', () => {
-    const asReq = (body: unknown): Request => ({ body } as Request);
+    const asReq = (body: unknown): Request => ({ body }) as Request;
 
     it('normalizes email to lowercase + trimmed', () => {
-      expect(loginEmailKey(asReq({ email: '  Test@EXAMPLE.com  ' }))).toBe(
-        'test@example.com',
-      );
+      expect(loginEmailKey(asReq({ email: '  Test@EXAMPLE.com  ' }))).toBe('test@example.com');
     });
 
     it('returns "" when body is missing', () => {
@@ -107,12 +105,9 @@ describe('Rate Limiter Middleware', () => {
         // Build forms via fromCodePoint so source literals can't be coalesced.
         // NFC: U+00E9. NFD: U+0065 + U+0301 (combining acute).
         const nfc = 'caf' + String.fromCodePoint(0x00e9) + '@example.com';
-        const nfd =
-          'caf' + String.fromCodePoint(0x0065, 0x0301) + '@example.com';
+        const nfd = 'caf' + String.fromCodePoint(0x0065, 0x0301) + '@example.com';
         expect(nfc).not.toBe(nfd);
-        expect(loginEmailKey(asReq({ email: nfc }))).toBe(
-          loginEmailKey(asReq({ email: nfd })),
-        );
+        expect(loginEmailKey(asReq({ email: nfc }))).toBe(loginEmailKey(asReq({ email: nfd })));
       });
 
       it('does not coalesce visually-similar but distinct codepoints (homoglyphs survive intentionally)', () => {
@@ -121,8 +116,7 @@ describe('Rate Limiter Middleware', () => {
         // constraint enforces single-form ownership; the rate-limit key
         // treats them as separate accounts.
         const latin = 'p' + String.fromCodePoint(0x0061) + 'ypal@example.com';
-        const cyrillic =
-          'p' + String.fromCodePoint(0x0430) + 'ypal@example.com';
+        const cyrillic = 'p' + String.fromCodePoint(0x0430) + 'ypal@example.com';
         expect(latin).not.toBe(cyrillic);
         expect(loginEmailKey(asReq({ email: latin }))).not.toBe(
           loginEmailKey(asReq({ email: cyrillic })),
@@ -132,8 +126,7 @@ describe('Rate Limiter Middleware', () => {
   });
 
   describe('authLimiterKeyGenerator', () => {
-    const asReq = (overrides: Partial<Request>): Request =>
-      ({ body: {}, ...overrides } as Request);
+    const asReq = (overrides: Partial<Request>): Request => ({ body: {}, ...overrides }) as Request;
 
     it('composes the IPv4 IP with normalized email', () => {
       const key = authLimiterKeyGenerator(
@@ -153,9 +146,7 @@ describe('Rate Limiter Middleware', () => {
     });
 
     it('falls back to "unknown" when req.ip is undefined', () => {
-      const key = authLimiterKeyGenerator(
-        asReq({ ip: undefined, body: { email: 'x@y.com' } }),
-      );
+      const key = authLimiterKeyGenerator(asReq({ ip: undefined, body: { email: 'x@y.com' } }));
       expect(key).toBe('unknown:x@y.com');
     });
 

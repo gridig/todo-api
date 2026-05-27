@@ -17,7 +17,11 @@ export async function createTestTodos(userId: string, count: number = 2): Promis
 }
 
 // Create a single test todo
-export async function createTestTodo(userId: string, text: string = 'Test Todo', done: boolean = false): Promise<Todo> {
+export async function createTestTodo(
+  userId: string,
+  text: string = 'Test Todo',
+  done: boolean = false,
+): Promise<Todo> {
   return TodoService.create({ text, userId, done });
 }
 

@@ -66,7 +66,7 @@ jobs:
 
     services:
       postgres:
-        image: postgres:16
+        image: timescale/timescaledb:latest-pg16
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
@@ -83,7 +83,8 @@ jobs:
       # DATABASE_URL is set here (not in .env.test alone) because `prisma generate`
       # and `prisma migrate deploy` run before Jest's setup.ts loads .env.test.
       # JWT_SECRET, NODE_ENV, and CORS_* come from .env.test + __tests__/setup.ts.
-      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/todo_api
+      DATABASE_URL: postgresql://db_app:db_app_dev@localhost:5432/todo_api
+      DATABASE_MIGRATE_URL: postgresql://db_admin:db_admin_dev@localhost:5432/todo_api
 
     steps:
       - uses: actions/checkout@v6
@@ -94,6 +95,9 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm exec prisma generate
+      # GH Actions services can't mount initdb files, so bootstrap roles via psql.
+      - name: Bootstrap DB roles
+        run: psql "postgresql://postgres:postgres@localhost:5432/todo_api" -v ON_ERROR_STOP=1 -f prisma/sql/bootstrap_roles.sql
       - run: pnpm exec prisma migrate deploy
       - run: pnpm run test:ci
       - uses: codecov/codecov-action@v6

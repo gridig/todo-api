@@ -1,14 +1,14 @@
 import express, { Response, Router } from 'express';
 import jwt from 'jsonwebtoken';
+import { createHash } from 'node:crypto';
 import UserService, { DUMMY_PASSWORD_HASH } from '../models/User.js';
 import { env } from '../config/env.js';
-import {
-  authLimiter,
-  loginEmailLimiter,
-  registerLimiter,
-} from '../middleware/rateLimiter.js';
+import { authLimiter, loginEmailLimiter, registerLimiter } from '../middleware/rateLimiter.js';
 import { validate, schemas } from '../middleware/validation.js';
 import { InvalidCredentialsError } from '../errors/index.js';
+import { writeOrLog } from '../lib/auditLog.js';
+import { AuditAction } from '../lib/auditActions.js';
+import prisma from '../lib/prisma.js';
 import type {
   RegisterRequest,
   LoginRequest,
@@ -16,6 +16,9 @@ import type {
   JWTPayload,
   RequestWithLogger,
 } from '../types/index.js';
+
+const hashEmail = (email: string): string =>
+  createHash('sha256').update(email.toLowerCase().trim()).digest('hex');
 
 const router: Router = express.Router();
 
@@ -37,8 +40,20 @@ router.post(
     });
 
     log.info({ userId: user.id, email: user.email }, 'User registered successfully');
+    void writeOrLog(
+      prisma,
+      {
+        action: AuditAction.AuthRegister,
+        outcome: 'success',
+        entityType: 'User',
+        entityId: user.id,
+        changedBy: user.id,
+        newValue: { id: user.id, email: user.email },
+      },
+      log,
+    );
     res.status(201).json({ token });
-  }
+  },
 );
 
 router.post(
@@ -71,6 +86,18 @@ router.post(
         },
         'Login failed - invalid credentials',
       );
+      // Hash the email rather than store it raw — preserves the dummy-hash
+      // anti-enumeration property so the audit table isn't itself an oracle.
+      void writeOrLog(
+        prisma,
+        {
+          action: AuditAction.AuthLogin,
+          outcome: 'failure',
+          outcomeReason: 'invalid-credentials',
+          metadata: { emailHash: hashEmail(email) },
+        },
+        log,
+      );
       const error = new InvalidCredentialsError();
       res.status(error.statusCode).json({ ...error.toJSON(), requestId });
       return;
@@ -81,10 +108,7 @@ router.post(
     // response. Failure is non-fatal: the next successful login retries.
     if (UserService.needsRehash(user.password)) {
       void UserService.updatePassword(user.id, password).catch((err: unknown) => {
-        log.warn(
-          { err, userId: user.id },
-          'Password rehash failed, will retry on next login',
-        );
+        log.warn({ err, userId: user.id }, 'Password rehash failed, will retry on next login');
       });
     }
 
@@ -97,8 +121,19 @@ router.post(
     });
 
     log.info({ userId: user.id, email: user.email }, 'User logged in successfully');
+    void writeOrLog(
+      prisma,
+      {
+        action: AuditAction.AuthLogin,
+        outcome: 'success',
+        entityType: 'User',
+        entityId: user.id,
+        changedBy: user.id,
+      },
+      log,
+    );
     res.status(200).json({ token });
-  }
+  },
 );
 
 export default router;

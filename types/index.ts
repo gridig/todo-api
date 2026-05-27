@@ -24,8 +24,11 @@ export interface Todo {
 
 // ==================== Request Extensions ====================
 
-export interface AuthenticatedRequestBody<TParams = object, TBody = unknown>
-  extends Request<TParams, unknown, TBody> {
+export interface AuthenticatedRequestBody<TParams = object, TBody = unknown> extends Request<
+  TParams,
+  unknown,
+  TBody
+> {
   userId: string;
   id: string;
   log: Logger;
@@ -129,20 +132,16 @@ export interface EnvConfig {
 export type AsyncRequestHandler = (
   req: AuthenticatedRequest,
   res: Response,
-  next: NextFunction
+  next: NextFunction,
 ) => Promise<void> | void;
 
-export type RequestHandler = (
-  req: Request,
-  res: Response,
-  next: NextFunction
-) => void;
+export type RequestHandler = (req: Request, res: Response, next: NextFunction) => void;
 
 export type ErrorRequestHandler = (
   err: Error,
   req: RequestWithLogger,
   res: Response,
-  next: NextFunction
+  next: NextFunction,
 ) => void;
 
 // ==================== Service Types ====================
@@ -150,10 +149,7 @@ export type ErrorRequestHandler = (
 export interface UserServiceInterface {
   create(data: { email: string; password: string }): Promise<User>;
   findByEmail(email: string): Promise<UserLoginFields | null>;
-  comparePassword(
-    plainPassword: string,
-    hashedPassword: string
-  ): Promise<boolean>;
+  comparePassword(plainPassword: string, hashedPassword: string): Promise<boolean>;
   updatePassword(userId: string, plainPassword: string): Promise<void>;
   needsRehash(hashedPassword: string): boolean;
   deleteMany(): Promise<{ count: number }>;

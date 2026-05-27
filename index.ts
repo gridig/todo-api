@@ -2,12 +2,7 @@ import { env } from './config/env.js';
 import { Server } from 'http';
 import cluster from 'cluster';
 import os from 'os';
-import prisma, {
-  pool,
-  probePool,
-  probeDatabase,
-  logPoolHealth,
-} from './lib/prisma.js';
+import prisma, { pool, probePool, probeDatabase, logPoolHealth } from './lib/prisma.js';
 import { createApp } from './app.js';
 import logger from './middleware/logger.js';
 import { connectWithRetry } from './lib/dbConnect.js';
@@ -36,22 +31,60 @@ export async function startServer() {
     // probe pool — to actually surface a TCP / auth / DB-down failure and
     // trigger the retry loop.
     logger.info('Connecting to PostgreSQL...');
-    await connectWithRetry(
-      async () => {
-        await prisma.$connect();
-        await probeDatabase();
-      },
-      logger,
-    );
+    await connectWithRetry(async () => {
+      await prisma.$connect();
+      await probeDatabase();
+    }, logger);
     logger.info('PostgreSQL connected successfully');
+
+    // Refuse to boot against a non-TimescaleDB Postgres. The audit_entries
+    // hypertable and retention policy are no-ops without the extension —
+    // we'd silently lose the SOC 2 retention guarantee and learn about it
+    // a year later when chunks fail to drop. Cheap to check, hard to miss.
+    const ext = await prisma.$queryRaw<Array<{ extversion: string }>>`
+      SELECT extversion FROM pg_extension WHERE extname = 'timescaledb'
+    `;
+    if (ext.length === 0) {
+      throw new Error(
+        'TimescaleDB extension is missing — audit_entries requires it. ' +
+          'Verify the Postgres image (expected: timescale/timescaledb:latest-pg16) ' +
+          'and that `prisma migrate deploy` has applied 20260526000001_add_audit_entries.',
+      );
+    }
+    logger.info({ timescaledbVersion: ext[0]?.extversion }, 'TimescaleDB extension verified');
+
+    // Tamper-evidence smoke probe: a successful UPDATE on audit_entries from
+    // the runtime role means the REVOKE was lost (bad migration, accidental
+    // GRANT, wrong DSN). DB_PLAN §8 originally placed this in deploy.yml; doing
+    // it at boot covers every environment (dev/CI/staging/prod), avoids
+    // duplicating the db_app DSN into a GitHub Actions secret, and turns a
+    // failing probe into a refused-to-boot signal the orchestrator already
+    // knows how to handle. WHERE FALSE keeps it free of side effects even
+    // if the REVOKE is mistakenly absent.
+    try {
+      await prisma.$executeRaw`UPDATE audit_entries SET action = 'probe' WHERE FALSE`;
+      throw new Error(
+        'AUDIT_TAMPER_PROBE_FAILED: UPDATE on audit_entries succeeded as the runtime role. ' +
+          'The audit-log REVOKE is not in force — refusing to boot. ' +
+          'Check that DATABASE_URL points to db_app (not the superuser) and that the ' +
+          '20260526000001_add_audit_entries migration has applied.',
+      );
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (message.startsWith('AUDIT_TAMPER_PROBE_FAILED')) throw err;
+      if (!/permission denied/i.test(message)) {
+        throw new Error(
+          `AUDIT_TAMPER_PROBE_INCONCLUSIVE: probe returned an unexpected error: ${message}`,
+          { cause: err },
+        );
+      }
+      logger.info('Audit-log tamper-evidence probe passed (UPDATE denied as expected)');
+    }
 
     // Periodic pool snapshot for log-aggregator alerting. Dev gets the same
     // data on demand via /health/ready, so the interval is prod-only.
     if (env.NODE_ENV === 'production') {
-      poolHealthInterval = setInterval(
-        logPoolHealth,
-        POOL_HEALTH_LOG_INTERVAL_MS,
-      );
+      poolHealthInterval = setInterval(logPoolHealth, POOL_HEALTH_LOG_INTERVAL_MS);
       poolHealthInterval.unref();
     }
 
@@ -72,10 +105,7 @@ export async function startServer() {
     );
 
     const server = app.listen(PORT, () => {
-      logger.info(
-        { port: PORT, pid: process.pid },
-        'Server started successfully',
-      );
+      logger.info({ port: PORT, pid: process.pid }, 'Server started successfully');
     });
 
     // Set explicit timeouts — Node defaults are either infinite or too long for production.
@@ -149,14 +179,10 @@ export function setupGracefulShutdown(server: Server): void {
 const isMainModule = import.meta.url === `file://${process.argv[1]}`;
 if (isMainModule) {
   const requestedWorkers = env.CLUSTER_WORKERS;
-  const numWorkers =
-    requestedWorkers === 0 ? os.cpus().length : requestedWorkers;
+  const numWorkers = requestedWorkers === 0 ? os.cpus().length : requestedWorkers;
 
   if (numWorkers > 1 && cluster.isPrimary) {
-    logger.info(
-      { workers: numWorkers, pid: process.pid },
-      'Primary process starting cluster',
-    );
+    logger.info({ workers: numWorkers, pid: process.pid }, 'Primary process starting cluster');
 
     for (let i = 0; i < numWorkers; i++) {
       cluster.fork();
@@ -176,9 +202,7 @@ if (isMainModule) {
     cluster.on('exit', (worker, code, signal) => {
       if (!isShuttingDown) {
         const now = Date.now();
-        recentRestarts = recentRestarts.filter(
-          (t) => now - t < RESTART_WINDOW_MS,
-        );
+        recentRestarts = recentRestarts.filter((t) => now - t < RESTART_WINDOW_MS);
         recentRestarts.push(now);
 
         if (recentRestarts.length > MAX_RESTARTS_IN_WINDOW) {
@@ -204,10 +228,7 @@ if (isMainModule) {
       }
 
       const remaining = Object.keys(cluster.workers ?? {}).length;
-      logger.info(
-        { remaining, workerId: worker.id },
-        'Worker exited during shutdown',
-      );
+      logger.info({ remaining, workerId: worker.id }, 'Worker exited during shutdown');
       if (remaining === 0) {
         logger.info('All workers exited, primary process shutting down');
         process.exit(0);
@@ -219,10 +240,7 @@ if (isMainModule) {
       isShuttingDown = true;
 
       const workerCount = Object.keys(cluster.workers ?? {}).length;
-      logger.info(
-        { signal, workerCount },
-        'Primary forwarding shutdown signal to workers',
-      );
+      logger.info({ signal, workerCount }, 'Primary forwarding shutdown signal to workers');
       for (const worker of Object.values(cluster.workers ?? {})) {
         worker?.process.kill(signal);
       }

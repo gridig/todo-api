@@ -57,10 +57,7 @@ describe('User Service', () => {
         password: plainPassword,
       });
 
-      const isMatch = await UserService.comparePassword(
-        plainPassword,
-        user.password
-      );
+      const isMatch = await UserService.comparePassword(plainPassword, user.password);
       expect(isMatch).toBe(true);
     });
 
@@ -70,10 +67,7 @@ describe('User Service', () => {
         password: 'TestPassword123!',
       });
 
-      const isMatch = await UserService.comparePassword(
-        'WrongPassword123!',
-        user.password
-      );
+      const isMatch = await UserService.comparePassword('WrongPassword123!', user.password);
       expect(isMatch).toBe(false);
     });
   });
@@ -104,7 +98,7 @@ describe('User Service', () => {
         UserService.create({
           email: 'test@example.com',
           password: 'AnotherPass123!',
-        })
+        }),
       ).rejects.toThrow();
     });
   });

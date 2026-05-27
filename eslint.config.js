@@ -2,15 +2,11 @@ import eslint from '@eslint/js';
 import tseslint from '@typescript-eslint/eslint-plugin';
 import tsparser from '@typescript-eslint/parser';
 import globals from 'globals';
+import prettierConfig from 'eslint-config-prettier';
 
 export default [
   {
-    ignores: [
-      'node_modules/**',
-      'coverage/**',
-      'dist/**',
-      'prisma/generated/**',
-    ],
+    ignores: ['node_modules/**', 'coverage/**', 'dist/**', 'prisma/generated/**'],
   },
   eslint.configs.recommended,
   {
@@ -32,10 +28,7 @@ export default [
     },
     rules: {
       ...tseslint.configs.recommended.rules,
-      '@typescript-eslint/no-unused-vars': [
-        'error',
-        { argsIgnorePattern: '^_' },
-      ],
+      '@typescript-eslint/no-unused-vars': ['error', { argsIgnorePattern: '^_' }],
       '@typescript-eslint/explicit-function-return-type': 'off',
       '@typescript-eslint/no-explicit-any': 'warn',
     },
@@ -54,12 +47,10 @@ export default [
     plugins: { '@typescript-eslint': tseslint },
     rules: {
       ...tseslint.configs.recommended.rules,
-      '@typescript-eslint/no-unused-vars': [
-        'error',
-        { argsIgnorePattern: '^_' },
-      ],
+      '@typescript-eslint/no-unused-vars': ['error', { argsIgnorePattern: '^_' }],
       '@typescript-eslint/explicit-function-return-type': 'off',
       '@typescript-eslint/no-explicit-any': 'warn',
     },
   },
+  prettierConfig,
 ];

@@ -11,9 +11,7 @@ const seed = async () => {
   await prisma.todo.deleteMany();
   await prisma.user.deleteMany();
 
-  console.log(
-    `Creating ${NUM_USERS} users with ${TODOS_PER_USER} todos each...`,
-  );
+  console.log(`Creating ${NUM_USERS} users with ${TODOS_PER_USER} todos each...`);
 
   for (let i = 0; i < NUM_USERS; i++) {
     const email = `benchuser${i}@example.com`;
@@ -30,14 +28,10 @@ const seed = async () => {
     }));
 
     await prisma.todo.createMany({ data: todos });
-    console.log(
-      `  User ${i + 1}/${NUM_USERS}: ${email} (${TODOS_PER_USER} todos)`,
-    );
+    console.log(`  User ${i + 1}/${NUM_USERS}: ${email} (${TODOS_PER_USER} todos)`);
   }
 
-  console.log(
-    `Seeded ${NUM_USERS} users, ${NUM_USERS * TODOS_PER_USER} todos.`,
-  );
+  console.log(`Seeded ${NUM_USERS} users, ${NUM_USERS * TODOS_PER_USER} todos.`);
   await prisma.$disconnect();
   await pool.end();
 };

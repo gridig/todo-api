@@ -2,9 +2,7 @@ import { assertProductionEnv } from '../../../config/env.js';
 
 const STRONG_TOKEN = 'a'.repeat(40);
 
-const baseProdCfg = (
-  overrides: Partial<Parameters<typeof assertProductionEnv>[0]> = {},
-) => ({
+const baseProdCfg = (overrides: Partial<Parameters<typeof assertProductionEnv>[0]> = {}) => ({
   NODE_ENV: 'production',
   METRICS_TOKEN: STRONG_TOKEN,
   DISABLE_RATE_LIMIT: false,
@@ -40,9 +38,7 @@ describe('assertProductionEnv', () => {
   it('errors when DISABLE_RATE_LIMIT=true without the confirmation flag', () => {
     const result = assertProductionEnv(baseProdCfg({ DISABLE_RATE_LIMIT: true }));
     expect(result.errors).toEqual(
-      expect.arrayContaining([
-        expect.stringMatching(/DISABLE_RATE_LIMIT_PRODUCTION_CONFIRM=true/),
-      ]),
+      expect.arrayContaining([expect.stringMatching(/DISABLE_RATE_LIMIT_PRODUCTION_CONFIRM=true/)]),
     );
   });
 
@@ -62,9 +58,7 @@ describe('assertProductionEnv', () => {
   });
 
   it('flags CORS_ORIGIN="*" with CORS_CREDENTIALS=true', () => {
-    const result = assertProductionEnv(
-      baseProdCfg({ CORS_ORIGIN: '*', CORS_CREDENTIALS: 'true' }),
-    );
+    const result = assertProductionEnv(baseProdCfg({ CORS_ORIGIN: '*', CORS_CREDENTIALS: 'true' }));
     expect(result.errors).toEqual(
       expect.arrayContaining([expect.stringMatching(/incompatible with CORS_CREDENTIALS/)]),
     );
@@ -73,9 +67,7 @@ describe('assertProductionEnv', () => {
   it('errors when ENABLE_ECHO_ROUTES=true without the confirmation flag', () => {
     const result = assertProductionEnv(baseProdCfg({ ENABLE_ECHO_ROUTES: true }));
     expect(result.errors).toEqual(
-      expect.arrayContaining([
-        expect.stringMatching(/ENABLE_ECHO_ROUTES_PRODUCTION_CONFIRM=true/),
-      ]),
+      expect.arrayContaining([expect.stringMatching(/ENABLE_ECHO_ROUTES_PRODUCTION_CONFIRM=true/)]),
     );
   });
 

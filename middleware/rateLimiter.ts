@@ -10,15 +10,9 @@ import { rateLimitHitsTotal } from './metrics.js';
 const rateLimitLogger = logger.child({ module: 'rate-limiter' });
 
 // Type for the rate limit handler function
-type RateLimitHandler = (
-  req: Request,
-  res: Response,
-  next: NextFunction,
-  options: Options,
-) => void;
+type RateLimitHandler = (req: Request, res: Response, next: NextFunction, options: Options) => void;
 
-const isRateLimitDisabled =
-  env.NODE_ENV === 'test' || env.DISABLE_RATE_LIMIT === true;
+const isRateLimitDisabled = env.NODE_ENV === 'test' || env.DISABLE_RATE_LIMIT === true;
 
 // Optional Redis client for distributed rate limiting across multiple instances.
 // Falls back to in-memory when REDIS_URL is not set (single-instance deployments).
@@ -30,10 +24,7 @@ if (env.REDIS_URL) {
     rateLimitLogger.error({ err }, 'Redis client error');
   });
   redisClient.connect().catch((err) => {
-    rateLimitLogger.error(
-      { err },
-      'Redis connect failed — using in-memory rate limiting',
-    );
+    rateLimitLogger.error({ err }, 'Redis connect failed — using in-memory rate limiting');
     redisClient = null;
   });
 }
@@ -54,12 +45,7 @@ const storeFor = (prefix: string): { store: RedisStore } | Record<string, never>
 
 // Custom handler to log rate limit events
 export const logRateLimitHandler = (limitType: string): RateLimitHandler => {
-  return (
-    req: Request,
-    res: Response,
-    _next: NextFunction,
-    options: Options,
-  ): void => {
+  return (req: Request, res: Response, _next: NextFunction, options: Options): void => {
     rateLimitHitsTotal.inc({ limiter_type: limitType });
 
     // Use req.log if available (has request ID), otherwise use module logger

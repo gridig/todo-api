@@ -65,9 +65,7 @@ describe('POST /todos - Create Todo', () => {
     });
 
     it('should reject request without auth token', async () => {
-      const response = await request(app)
-        .post('/todos')
-        .send({ text: 'New Todo' });
+      const response = await request(app).post('/todos').send({ text: 'New Todo' });
 
       expect(response.status).toBe(401);
     });

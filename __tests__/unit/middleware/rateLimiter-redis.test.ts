@@ -11,7 +11,7 @@ jest.unstable_mockModule('../../../config/env.js', () => ({
     NODE_ENV: 'test',
     REDIS_URL: 'redis://localhost:6379',
     DISABLE_RATE_LIMIT: true, // skip the actual limiter; we only care
-                              // about module-load-time branch coverage
+    // about module-load-time branch coverage
   },
 }));
 
@@ -35,7 +35,9 @@ jest.unstable_mockModule('redis', () => ({
 jest.unstable_mockModule('rate-limit-redis', () => ({
   RedisStore: class FakeRedisStore {
     init = jest.fn();
-    increment = jest.fn<() => Promise<{ totalHits: number; resetTime: Date }>>().mockResolvedValue({ totalHits: 1, resetTime: new Date() });
+    increment = jest
+      .fn<() => Promise<{ totalHits: number; resetTime: Date }>>()
+      .mockResolvedValue({ totalHits: 1, resetTime: new Date() });
     decrement = jest.fn<() => Promise<void>>().mockResolvedValue(undefined);
     resetKey = jest.fn<() => Promise<void>>().mockResolvedValue(undefined);
     resetAll = jest.fn<() => Promise<void>>().mockResolvedValue(undefined);

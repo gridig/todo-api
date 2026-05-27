@@ -42,9 +42,7 @@ describe('Todo Error Handling', () => {
         .spyOn(TodoService, 'findByUser')
         .mockRejectedValue(new Error('Database error'));
 
-      const response = await request(app)
-        .get('/todos')
-        .set('Authorization', `Bearer ${authToken}`);
+      const response = await request(app).get('/todos').set('Authorization', `Bearer ${authToken}`);
 
       expect(response.status).toBe(500);
       expect(response.body.error.code).toBe('INTERNAL_ERROR');
@@ -54,9 +52,7 @@ describe('Todo Error Handling', () => {
     });
 
     it('should handle database errors when creating todos', async () => {
-      const spy = jest
-        .spyOn(TodoService, 'create')
-        .mockRejectedValue(new Error('Database error'));
+      const spy = jest.spyOn(TodoService, 'create').mockRejectedValue(new Error('Database error'));
 
       const response = await request(app)
         .post('/todos')
@@ -96,9 +92,7 @@ describe('Todo Error Handling', () => {
         userId,
       });
 
-      const spy = jest
-        .spyOn(TodoService, 'delete')
-        .mockRejectedValue(new Error('Database error'));
+      const spy = jest.spyOn(TodoService, 'delete').mockRejectedValue(new Error('Database error'));
 
       const response = await request(app)
         .delete(`/todos/${todo.id}`)

@@ -54,18 +54,9 @@ describe('Request Logger Middleware', () => {
       }),
       'Request completed',
     );
-    expect(req.log.info).not.toHaveBeenCalledWith(
-      expect.anything(),
-      'Request completed',
-    );
-    expect(req.log.warn).not.toHaveBeenCalledWith(
-      expect.anything(),
-      'Request completed',
-    );
-    expect(req.log.error).not.toHaveBeenCalledWith(
-      expect.anything(),
-      'Request completed',
-    );
+    expect(req.log.info).not.toHaveBeenCalledWith(expect.anything(), 'Request completed');
+    expect(req.log.warn).not.toHaveBeenCalledWith(expect.anything(), 'Request completed');
+    expect(req.log.error).not.toHaveBeenCalledWith(expect.anything(), 'Request completed');
   });
 
   it('should log at warn level for 4xx responses', () => {
@@ -80,14 +71,8 @@ describe('Request Logger Middleware', () => {
       }),
       'Request completed',
     );
-    expect(req.log.info).not.toHaveBeenCalledWith(
-      expect.anything(),
-      'Request completed',
-    );
-    expect(req.log.error).not.toHaveBeenCalledWith(
-      expect.anything(),
-      'Request completed',
-    );
+    expect(req.log.info).not.toHaveBeenCalledWith(expect.anything(), 'Request completed');
+    expect(req.log.error).not.toHaveBeenCalledWith(expect.anything(), 'Request completed');
   });
 
   it('should log at error level for 500 responses', () => {
@@ -102,14 +87,8 @@ describe('Request Logger Middleware', () => {
       }),
       'Request completed',
     );
-    expect(req.log.info).not.toHaveBeenCalledWith(
-      expect.anything(),
-      'Request completed',
-    );
-    expect(req.log.warn).not.toHaveBeenCalledWith(
-      expect.anything(),
-      'Request completed',
-    );
+    expect(req.log.info).not.toHaveBeenCalledWith(expect.anything(), 'Request completed');
+    expect(req.log.warn).not.toHaveBeenCalledWith(expect.anything(), 'Request completed');
   });
 
   it('should log at error level for 502 responses', () => {
@@ -146,10 +125,7 @@ describe('Request Logger Middleware', () => {
       }),
       'Request completed',
     );
-    expect(req.log.error).not.toHaveBeenCalledWith(
-      expect.anything(),
-      'Request completed',
-    );
+    expect(req.log.error).not.toHaveBeenCalledWith(expect.anything(), 'Request completed');
   });
 
   it('should not log twice when middleware runs twice on the same response', () => {
@@ -164,9 +140,6 @@ describe('Request Logger Middleware', () => {
   it('should log incoming request with userAgent in development', () => {
     requestLoggerMiddleware(req, res, next);
 
-    expect(req.log.info).toHaveBeenCalledWith(
-      { userAgent: 'test-user-agent' },
-      'Incoming request',
-    );
+    expect(req.log.info).toHaveBeenCalledWith({ userAgent: 'test-user-agent' }, 'Incoming request');
   });
 });

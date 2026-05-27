@@ -2,18 +2,12 @@ import express, { Request, Response, Router } from 'express';
 import TodoService from '../models/Todo.js';
 import { auth } from '../middleware/auth.js';
 import { readLimiter, writeLimiter } from '../middleware/rateLimiter.js';
-import {
-  validate,
-  validateQuery,
-  validateParams,
-  schemas,
-} from '../middleware/validation.js';
+import { validate, validateQuery, validateParams, schemas } from '../middleware/validation.js';
 import { TodoNotFoundError, InternalServerError } from '../errors/index.js';
-import type {
-  AuthenticatedRequest,
-  CreateTodoRequest,
-  PaginationParams,
-} from '../types/index.js';
+import { writeOrLog } from '../lib/auditLog.js';
+import { AuditAction } from '../lib/auditActions.js';
+import prisma from '../lib/prisma.js';
+import type { AuthenticatedRequest, CreateTodoRequest, PaginationParams } from '../types/index.js';
 
 const router: Router = express.Router();
 
@@ -38,7 +32,7 @@ router.get(
           count: result.data.length,
           hasMore: result.meta.hasMore,
         },
-        'Todos fetched successfully'
+        'Todos fetched successfully',
       );
 
       res.json(result);
@@ -48,7 +42,7 @@ router.get(
           err,
           userId,
         },
-        'Failed to fetch todos'
+        'Failed to fetch todos',
       );
 
       const error = new InternalServerError();
@@ -57,7 +51,7 @@ router.get(
         requestId,
       });
     }
-  }
+  },
 );
 
 // POST create todo
@@ -77,7 +71,7 @@ router.post(
           todoId: newTodo.id,
           userId,
         },
-        'Todo created successfully'
+        'Todo created successfully',
       );
 
       res.status(201).json(newTodo);
@@ -88,7 +82,7 @@ router.post(
           userId,
           body: req.body,
         },
-        'Failed to create todo'
+        'Failed to create todo',
       );
 
       const error = new InternalServerError();
@@ -97,7 +91,7 @@ router.post(
         requestId,
       });
     }
-  }
+  },
 );
 
 // GET single todo
@@ -119,7 +113,21 @@ router.get(
             todoId: req.params.id,
             userId,
           },
-          'Todo not found'
+          'Todo not found',
+        );
+        // Cross-user vs truly-missing is indistinguishable to the client (both
+        // 404), but the audit row preserves the distinction for security review
+        // via entity_id — analysts can cross-reference IDs across users.
+        void writeOrLog(
+          prisma,
+          {
+            action: AuditAction.AccessDenied,
+            outcome: 'failure',
+            entityType: 'Todo',
+            entityId: req.params.id,
+            changedBy: userId,
+          },
+          log,
         );
         const error = new TodoNotFoundError();
         res.status(error.statusCode).json({
@@ -134,7 +142,7 @@ router.get(
           todoId: todo.id,
           userId,
         },
-        'Todo fetched successfully'
+        'Todo fetched successfully',
       );
 
       res.json(todo);
@@ -145,7 +153,7 @@ router.get(
           todoId: req.params.id,
           userId,
         },
-        'Failed to fetch todo'
+        'Failed to fetch todo',
       );
 
       const error = new InternalServerError();
@@ -154,7 +162,7 @@ router.get(
         requestId,
       });
     }
-  }
+  },
 );
 
 // PATCH toggle todo
@@ -177,7 +185,18 @@ router.patch(
             todoId: req.params.id,
             userId,
           },
-          'Todo not found for toggle'
+          'Todo not found for toggle',
+        );
+        void writeOrLog(
+          prisma,
+          {
+            action: AuditAction.AccessDenied,
+            outcome: 'failure',
+            entityType: 'Todo',
+            entityId: req.params.id,
+            changedBy: userId,
+          },
+          log,
         );
 
         const error = new TodoNotFoundError();
@@ -195,7 +214,7 @@ router.patch(
           previousStatus: !updatedTodo.done,
           newStatus: updatedTodo.done,
         },
-        'Todo status toggled successfully'
+        'Todo status toggled successfully',
       );
 
       res.json(updatedTodo);
@@ -206,7 +225,7 @@ router.patch(
           todoId: req.params.id,
           userId,
         },
-        'Failed to toggle todo'
+        'Failed to toggle todo',
       );
 
       const error = new InternalServerError();
@@ -215,7 +234,7 @@ router.patch(
         requestId,
       });
     }
-  }
+  },
 );
 
 // DELETE todo
@@ -238,7 +257,18 @@ router.delete(
             todoId: req.params.id,
             userId,
           },
-          'Todo not found for deletion'
+          'Todo not found for deletion',
+        );
+        void writeOrLog(
+          prisma,
+          {
+            action: AuditAction.AccessDenied,
+            outcome: 'failure',
+            entityType: 'Todo',
+            entityId: req.params.id,
+            changedBy: userId,
+          },
+          log,
         );
         const error = new TodoNotFoundError();
         res.status(error.statusCode).json({
@@ -253,7 +283,7 @@ router.delete(
           todoId: todo.id,
           userId,
         },
-        'Todo deleted successfully'
+        'Todo deleted successfully',
       );
 
       res.status(204).end();
@@ -264,7 +294,7 @@ router.delete(
           todoId: req.params.id,
           userId,
         },
-        'Failed to delete todo'
+        'Failed to delete todo',
       );
 
       const error = new InternalServerError();
@@ -273,7 +303,7 @@ router.delete(
         requestId,
       });
     }
-  }
+  },
 );
 
 export default router;

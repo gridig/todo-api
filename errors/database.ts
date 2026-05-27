@@ -1,9 +1,4 @@
-import {
-  AppError,
-  ConflictError,
-  InternalServerError,
-  ServiceUnavailableError,
-} from './index.js';
+import { AppError, ConflictError, InternalServerError, ServiceUnavailableError } from './index.js';
 
 // 503 with code DATABASE_UNAVAILABLE — clients should retry on this code and
 // honour the Retry-After header. Inherits ServiceUnavailableError so the
@@ -46,17 +41,11 @@ export function classifyPrismaError(err: unknown): AppError | null {
     // Pool timeout — drains in seconds, short Retry-After matches the
     // pool-saturation logic in routes/health.ts.
     case 'P2024':
-      return new DatabaseUnavailableError(
-        'Database connection pool exhausted',
-        5,
-      );
+      return new DatabaseUnavailableError('Database connection pool exhausted', 5);
 
     // FK constraint — conflict (409).
     case 'P2003':
-      return new ConflictError(
-        'Foreign key constraint failed',
-        'FOREIGN_KEY_CONSTRAINT',
-      );
+      return new ConflictError('Foreign key constraint failed', 'FOREIGN_KEY_CONSTRAINT');
 
     // Auth / access misconfiguration — not retryable; surfaces as 500 because
     // the client can do nothing about it.

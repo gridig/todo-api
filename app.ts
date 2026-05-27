@@ -4,6 +4,7 @@ import authRoutes from './routes/auth.js';
 import todoRoutes from './routes/todos.js';
 import { globalLimiter } from './middleware/rateLimiter.js';
 import { requestIdMiddleware } from './middleware/requestId.js';
+import { requestContextMiddleware } from './middleware/requestContext.js';
 import { requestLoggerMiddleware } from './middleware/requestLogger.js';
 import { errorHandler } from './middleware/errorHandler.js';
 import { corsMiddleware } from './middleware/cors.js';
@@ -30,6 +31,10 @@ export const createApp = (): Application => {
   // IMPORTANT: Request ID middleware MUST be first after security headers
   // This creates req.id and req.log for all subsequent middleware
   app.use(requestIdMiddleware);
+
+  // AsyncLocalStorage scope so audit-log writes downstream can pick up
+  // requestId / ip / userAgent without parameter plumbing.
+  app.use(requestContextMiddleware);
 
   // Metrics instrumentation (starts the request timer)
   app.use(metricsMiddleware);

@@ -6,9 +6,7 @@ import type { RequestWithLogger } from '../types/index.js';
 /**
  * Extract request ID from headers, handling string or string[] types
  */
-const getHeaderValue = (
-  value: string | string[] | undefined
-): string | undefined => {
+const getHeaderValue = (value: string | string[] | undefined): string | undefined => {
   if (typeof value === 'string') return value;
   if (Array.isArray(value) && value.length > 0) return value[0];
   return undefined;
@@ -26,11 +24,9 @@ const sanitizeRequestId = (value: string | undefined): string | undefined =>
 export const requestIdMiddleware = (
   req: RequestWithLogger,
   res: Response,
-  next: NextFunction
+  next: NextFunction,
 ): void => {
-  const incomingCorrelationId = sanitizeRequestId(
-    getHeaderValue(req.headers['x-correlation-id']),
-  );
+  const incomingCorrelationId = sanitizeRequestId(getHeaderValue(req.headers['x-correlation-id']));
 
   // Check for existing correlation ID from upstream services
   req.id =

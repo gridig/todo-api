@@ -4,11 +4,7 @@ import jwt from 'jsonwebtoken';
 import UserService from '../../models/User.js';
 import prisma from '../../lib/prisma.js';
 import { env } from '../../config/env.js';
-import {
-  createTestApp,
-  connectTestDB,
-  disconnectTestDB,
-} from '../helpers/testSetup.js';
+import { createTestApp, connectTestDB, disconnectTestDB } from '../helpers/testSetup.js';
 import { jest } from '@jest/globals';
 
 const app = createTestApp();
@@ -161,8 +157,7 @@ describe('Authentication Endpoints', () => {
       // pipeline normalization cannot collapse them accidentally.
       // NFC: 'caf' + U+00E9. NFD: 'caf' + U+0065 + U+0301 (combining acute).
       const nfc = 'caf' + String.fromCodePoint(0x00e9) + '@example.com';
-      const nfd =
-        'caf' + String.fromCodePoint(0x0065, 0x0301) + '@example.com';
+      const nfd = 'caf' + String.fromCodePoint(0x0065, 0x0301) + '@example.com';
       expect(nfc).not.toBe(nfd);
       expect(nfc.length).not.toBe(nfd.length);
 
@@ -183,10 +178,12 @@ describe('Authentication Endpoints', () => {
 
   describe('JWT payload shape and bcrypt rehash', () => {
     it('issues tokens with sub/iss/aud claims and HS256', async () => {
-      const registerResponse = await request(app).post('/auth/register').send({
-        email: `claims-${Date.now()}@example.com`,
-        password: 'TestPass123!',
-      });
+      const registerResponse = await request(app)
+        .post('/auth/register')
+        .send({
+          email: `claims-${Date.now()}@example.com`,
+          password: 'TestPass123!',
+        });
       expect(registerResponse.status).toBe(201);
 
       const decoded = jwt.decode(registerResponse.body.token, {
@@ -205,14 +202,11 @@ describe('Authentication Endpoints', () => {
       // Grace-window invariant: tokens minted before the iss/aud rollout
       // still verify successfully, so users are not forced to re-login on
       // the day of deploy.
-      const { user } = await (
-        await import('../helpers/testSetup.js')
-      ).createTestUser();
-      const legacyToken = jwt.sign(
-        { userId: user.id },
-        env.JWT_SECRET,
-        { expiresIn: '24h', algorithm: 'HS256' },
-      );
+      const { user } = await (await import('../helpers/testSetup.js')).createTestUser();
+      const legacyToken = jwt.sign({ userId: user.id }, env.JWT_SECRET, {
+        expiresIn: '24h',
+        algorithm: 'HS256',
+      });
 
       const response = await request(app)
         .get('/todos')

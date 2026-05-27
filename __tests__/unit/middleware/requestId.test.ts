@@ -24,10 +24,7 @@ describe('RequestId Middleware', () => {
     requestIdMiddleware(req, res, next);
 
     expect(req.id).toBe('custom-request-id');
-    expect(res.setHeader).toHaveBeenCalledWith(
-      'X-Request-ID',
-      'custom-request-id'
-    );
+    expect(res.setHeader).toHaveBeenCalledWith('X-Request-ID', 'custom-request-id');
     expect(next).toHaveBeenCalled();
   });
 
@@ -43,9 +40,7 @@ describe('RequestId Middleware', () => {
   it('should generate UUID when no request ID headers are provided', () => {
     requestIdMiddleware(req, res, next);
 
-    expect(req.id).toMatch(
-      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
-    );
+    expect(req.id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i);
     expect(next).toHaveBeenCalled();
   });
 
@@ -63,9 +58,7 @@ describe('RequestId Middleware', () => {
 
     requestIdMiddleware(req, res, next);
 
-    expect(req.id).toMatch(
-      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
-    );
+    expect(req.id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i);
     expect(next).toHaveBeenCalled();
   });
 
@@ -78,8 +71,7 @@ describe('RequestId Middleware', () => {
   });
 
   describe('input validation', () => {
-    const UUID_PATTERN =
-      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
     it('falls back to a UUID when x-request-id contains forbidden characters', () => {
       req.headers['x-request-id'] = 'evil\nLog-Injection: x';
@@ -125,9 +117,7 @@ describe('RequestId Middleware', () => {
 
       // X-Correlation-ID is set only when the inbound value passes validation.
       const calls = (res.setHeader as jest.Mock).mock.calls;
-      const correlationCall = calls.find(
-        (call) => call[0] === 'X-Correlation-ID',
-      );
+      const correlationCall = calls.find((call) => call[0] === 'X-Correlation-ID');
       expect(correlationCall).toBeUndefined();
     });
   });

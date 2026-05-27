@@ -2,13 +2,15 @@ import jwt from 'jsonwebtoken';
 import { Response, NextFunction } from 'express';
 import { env } from '../config/env.js';
 import { NoTokenError, InvalidTokenError } from '../errors/index.js';
+import { requestContext } from '../lib/requestContext.js';
+import { writeOrLog } from '../lib/auditLog.js';
+import { AuditAction } from '../lib/auditActions.js';
+import prisma from '../lib/prisma.js';
 import type { RequestWithLogger } from '../types/index.js';
 
-export const auth = (
-  req: RequestWithLogger,
-  res: Response,
-  next: NextFunction,
-): void => {
+const TOKEN_REASON_MAX_LEN = 100;
+
+export const auth = (req: RequestWithLogger, res: Response, next: NextFunction): void => {
   const { log, id: requestId } = req;
   try {
     const authHeader = req.header('Authorization');
@@ -20,6 +22,11 @@ export const auth = (
           ip: req.ip,
         },
         'Authentication failed - no token provided',
+      );
+      void writeOrLog(
+        prisma,
+        { action: AuditAction.AuthNoToken, outcome: 'failure', outcomeReason: 'no-auth-header' },
+        log,
       );
       const error = new NoTokenError();
       res.status(error.statusCode).json({
@@ -39,6 +46,11 @@ export const auth = (
           ip: req.ip,
         },
         'Authentication failed - empty token',
+      );
+      void writeOrLog(
+        prisma,
+        { action: AuditAction.AuthNoToken, outcome: 'failure', outcomeReason: 'empty-bearer' },
+        log,
       );
       const error = new NoTokenError();
       res.status(error.statusCode).json({
@@ -81,15 +93,28 @@ export const auth = (
 
     (req as RequestWithLogger & { userId: string }).userId = userId;
 
+    // Overlay userId onto the per-request ALS store so audit writes from
+    // downstream handlers attribute the actor without explicit plumbing.
+    const store = requestContext.getStore();
+    if (store) {
+      requestContext.enterWith({ ...store, userId });
+    }
+
     next();
   } catch (err) {
+    const reason = err instanceof Error ? err.message.slice(0, TOKEN_REASON_MAX_LEN) : 'unknown';
     log.warn(
       {
-        err: err instanceof Error ? err.message : 'Unknown error', // Don't log full error (might contain token)
+        err: reason, // Don't log full error (might contain token)
         path: req.path,
         ip: req.ip,
       },
       'Authentication failed - invalid token',
+    );
+    void writeOrLog(
+      prisma,
+      { action: AuditAction.AuthTokenInvalid, outcome: 'failure', outcomeReason: reason },
+      log,
     );
 
     const error = new InvalidTokenError();

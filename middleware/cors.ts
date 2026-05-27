@@ -73,10 +73,7 @@ export const createOriginValidator = (
  * Note: Preflight OPTIONS requests are automatically handled by the cors package
  */
 export const corsMiddleware = cors({
-  origin: createOriginValidator(
-    parseOrigins(env.CORS_ORIGIN),
-    env.CORS_ALLOW_NO_ORIGIN,
-  ),
+  origin: createOriginValidator(parseOrigins(env.CORS_ORIGIN), env.CORS_ALLOW_NO_ORIGIN),
   credentials: env.CORS_CREDENTIALS === 'true',
   methods: env.CORS_METHODS.split(',').map((method) => method.trim()),
   allowedHeaders: env.CORS_HEADERS.split(',').map((header) => header.trim()),

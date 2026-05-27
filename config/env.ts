@@ -5,9 +5,7 @@ const JWT_SECRET_MIN_LENGTH = 32;
 
 const jwtSecret = makeValidator<string>((value) => {
   if (typeof value !== 'string' || value.length < JWT_SECRET_MIN_LENGTH) {
-    throw new Error(
-      `JWT_SECRET must be at least ${JWT_SECRET_MIN_LENGTH} characters long`,
-    );
+    throw new Error(`JWT_SECRET must be at least ${JWT_SECRET_MIN_LENGTH} characters long`);
   }
   return value;
 });
@@ -37,8 +35,17 @@ export const env = cleanEnv(process.env, {
 
   // Database Configuration
   DATABASE_URL: url({
-    desc: 'PostgreSQL connection string (required)',
-    example: 'postgresql://user:password@localhost:5432/todo_api',
+    desc: 'PostgreSQL connection string for the runtime app (db_app role)',
+    example: 'postgresql://db_app:db_app_dev@localhost:5432/todo_api',
+  }),
+
+  // Consumed only by prisma.config.ts during `prisma migrate deploy` so
+  // migrations can connect as the schema owner (db_admin) while the app
+  // continues to connect as db_app. Unset → falls back to DATABASE_URL.
+  DATABASE_MIGRATE_URL: url({
+    default: undefined,
+    desc: 'Optional admin DSN used only by `prisma migrate deploy`. Required once role separation is in place.',
+    example: 'postgresql://db_admin:db_admin_dev@localhost:5432/todo_api',
   }),
 
   // Authentication
@@ -252,9 +259,7 @@ export interface ProductionAssertionResult {
   warnings: string[];
 }
 
-export function assertProductionEnv(
-  cfg: ProductionAssertionInput,
-): ProductionAssertionResult {
+export function assertProductionEnv(cfg: ProductionAssertionInput): ProductionAssertionResult {
   const errors: string[] = [];
   const warnings: string[] = [];
 
@@ -297,7 +302,5 @@ for (const w of prodWarnings) {
   process.stderr.write(`WARNING: ${w}\n`);
 }
 if (prodErrors.length > 0) {
-  throw new Error(
-    `Invalid production configuration:\n  - ${prodErrors.join('\n  - ')}`,
-  );
+  throw new Error(`Invalid production configuration:\n  - ${prodErrors.join('\n  - ')}`);
 }

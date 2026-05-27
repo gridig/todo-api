@@ -1,4 +1,5 @@
 import { Application } from 'express';
+import { Pool, type QueryResultRow } from 'pg';
 import type { User, JWTPayload } from '../../types/index.js';
 import { createApp } from '../../app.js';
 import prisma, { pool, probePool } from '../../lib/prisma.js';
@@ -7,6 +8,43 @@ import crypto from 'crypto';
 import UserService from '../../models/User.js';
 import TodoService from '../../models/Todo.js';
 import { env } from '../../config/env.js';
+
+// Privileged pool wired to the admin DSN so tests can TRUNCATE audit_entries
+// (the runtime db_app role is denied UPDATE/DELETE/TRUNCATE by design). Lazy
+// so suites that never touch the audit table do not pay the connect cost.
+let adminPoolInstance: Pool | undefined;
+const getAdminPool = (): Pool => {
+  if (!adminPoolInstance) {
+    adminPoolInstance = new Pool({
+      connectionString: process.env.DATABASE_MIGRATE_URL ?? env.DATABASE_URL,
+      max: 1,
+    });
+  }
+  return adminPoolInstance;
+};
+
+export async function truncateAuditEntries(): Promise<void> {
+  await getAdminPool().query('TRUNCATE audit_entries RESTART IDENTITY CASCADE');
+}
+
+// Poll for an audit row matching the predicate. Necessary because audit writes
+// from auth/route handlers are fire-and-forget (`void writeOrLog(...)`), so the
+// row may not be visible the instant the HTTP response returns to the test.
+export async function pollForAuditRow<T extends QueryResultRow>(
+  whereClause: string,
+  params: unknown[] = [],
+  options: { maxAttempts?: number; intervalMs?: number } = {},
+): Promise<T | null> {
+  const maxAttempts = options.maxAttempts ?? 40;
+  const intervalMs = options.intervalMs ?? 25;
+  const sql = `SELECT * FROM audit_entries WHERE ${whereClause} ORDER BY changed_at DESC LIMIT 1`;
+  for (let i = 0; i < maxAttempts; i++) {
+    const res = await getAdminPool().query<T>(sql, params);
+    if (res.rowCount && res.rowCount > 0) return res.rows[0] ?? null;
+    await new Promise((r) => setTimeout(r, intervalMs));
+  }
+  return null;
+}
 
 // Generate a unique ID for test isolation using cryptographic UUID
 export function generateUniqueId(): string {
@@ -25,9 +63,7 @@ interface TestUserResult {
 }
 
 // Setup test user and auth token - reusable
-export async function createTestUser(
-  email: string | null = null
-): Promise<TestUserResult> {
+export async function createTestUser(email: string | null = null): Promise<TestUserResult> {
   // Use timestamp to ensure unique email if not provided
   const userEmail = email || `test-${generateUniqueId()}@example.com`;
 
@@ -38,16 +74,12 @@ export async function createTestUser(
 
   // Issue test tokens in the same shape production issues: sub + iss + aud.
   // Keeps the test suite forward-compatible with JWT_VERIFY_REQUIRE_CLAIMS=true.
-  const authToken = jwt.sign(
-    { sub: user.id } as JWTPayload,
-    env.JWT_SECRET,
-    {
-      expiresIn: '24h',
-      algorithm: 'HS256',
-      issuer: env.JWT_ISSUER,
-      audience: env.JWT_AUDIENCE,
-    }
-  );
+  const authToken = jwt.sign({ sub: user.id } as JWTPayload, env.JWT_SECRET, {
+    expiresIn: '24h',
+    algorithm: 'HS256',
+    issuer: env.JWT_ISSUER,
+    audience: env.JWT_AUDIENCE,
+  });
 
   return { user, authToken, userId: user.id };
 }
@@ -58,7 +90,9 @@ export async function connectTestDB(): Promise<void> {
 
 export async function disconnectTestDB(): Promise<void> {
   await prisma.$disconnect();
-  await Promise.all([pool.end(), probePool.end()]);
+  const closes: Promise<unknown>[] = [pool.end(), probePool.end()];
+  if (adminPoolInstance) closes.push(adminPoolInstance.end());
+  await Promise.all(closes);
 }
 
 export async function cleanupTestData(): Promise<void> {

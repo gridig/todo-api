@@ -80,9 +80,7 @@ export const schemas = {
     password: Joi.string()
       .min(8)
       .max(72)
-      .pattern(
-        /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]+$/,
-      )
+      .pattern(/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]+$/)
       .required()
       .messages({
         'string.pattern.base':

@@ -1,11 +1,7 @@
 import express, { Response, Router } from 'express';
 import os from 'os';
 import { env } from '../config/env.js';
-import {
-  getPoolMetrics,
-  POOL_UTILIZATION_WARN_THRESHOLD,
-  probeDatabase,
-} from '../lib/prisma.js';
+import { getPoolMetrics, POOL_UTILIZATION_WARN_THRESHOLD, probeDatabase } from '../lib/prisma.js';
 import { healthLimiter } from '../middleware/rateLimiter.js';
 import { metricsAuthMiddleware } from '../middleware/metrics.js';
 import type { RequestWithLogger } from '../types/index.js';
@@ -50,9 +46,7 @@ interface ReadinessOutcome {
   payload: Record<string, unknown>;
 }
 
-async function buildReadinessPayload(
-  log: RequestWithLogger['log'],
-): Promise<ReadinessOutcome> {
+async function buildReadinessPayload(log: RequestWithLogger['log']): Promise<ReadinessOutcome> {
   const uptime = Math.floor((Date.now() - startTime) / 1000);
 
   let isDatabaseReady = false;
@@ -149,27 +143,22 @@ function setRetryAfter(res: Response, isDatabaseReady: boolean): void {
 // Returns only `{ status, timestamp }` plus 200/503; rich pool/CPU/memory
 // internals live behind /ready/detailed so unauthenticated callers cannot
 // recon process-internal load for DoS targeting. See security-audit-2026-05-18.md.
-router.get(
-  '/ready',
-  healthLimiter,
-  async (req: RequestWithLogger, res: Response) => {
-    const { log } = req;
-    const { isReady, isDatabaseReady, payload } =
-      await buildReadinessPayload(log);
+router.get('/ready', healthLimiter, async (req: RequestWithLogger, res: Response) => {
+  const { log } = req;
+  const { isReady, isDatabaseReady, payload } = await buildReadinessPayload(log);
 
-    if (!isReady) {
-      log.warn(payload, 'Health check - readiness probe failed');
-      setRetryAfter(res, isDatabaseReady);
-    } else {
-      log.debug(payload, 'Health check - readiness probe passed');
-    }
+  if (!isReady) {
+    log.warn(payload, 'Health check - readiness probe failed');
+    setRetryAfter(res, isDatabaseReady);
+  } else {
+    log.debug(payload, 'Health check - readiness probe passed');
+  }
 
-    res.status(isReady ? 200 : 503).json({
-      status: payload.status,
-      timestamp: payload.timestamp,
-    });
-  },
-);
+  res.status(isReady ? 200 : 503).json({
+    status: payload.status,
+    timestamp: payload.timestamp,
+  });
+});
 
 // Authenticated detailed readiness — same gate as /metrics (METRICS_TOKEN
 // bearer). Used by operators and dashboards; not by orchestrators.
@@ -179,8 +168,7 @@ router.get(
   metricsAuthMiddleware,
   async (req: RequestWithLogger, res: Response) => {
     const { log } = req;
-    const { isReady, isDatabaseReady, payload } =
-      await buildReadinessPayload(log);
+    const { isReady, isDatabaseReady, payload } = await buildReadinessPayload(log);
 
     if (!isReady) {
       setRetryAfter(res, isDatabaseReady);

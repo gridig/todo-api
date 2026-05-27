@@ -1,14 +1,32 @@
 import prisma from '../lib/prisma.js';
-import type { Todo, TodoServiceInterface, PaginationParams, PaginatedResult } from '../types/index.js';
+import auditLog from '../lib/auditLog.js';
+import { AuditAction } from '../lib/auditActions.js';
+import type {
+  Todo,
+  TodoServiceInterface,
+  PaginationParams,
+  PaginatedResult,
+} from '../types/index.js';
 
 export const TodoService: TodoServiceInterface = {
   async create({ text, userId, done }) {
-    return prisma.todo.create({
-      data: {
-        text: text.trim(),
-        userId,
-        ...(done !== undefined && { done }),
-      },
+    return prisma.$transaction(async (tx) => {
+      const todo = await tx.todo.create({
+        data: {
+          text: text.trim(),
+          userId,
+          ...(done !== undefined && { done }),
+        },
+      });
+      await auditLog.write(tx, {
+        action: AuditAction.TodoCreate,
+        outcome: 'success',
+        entityType: 'Todo',
+        entityId: todo.id,
+        changedBy: userId,
+        newValue: { id: todo.id, text: todo.text, done: todo.done },
+      });
+      return todo;
     });
   },
 
@@ -38,34 +56,61 @@ export const TodoService: TodoServiceInterface = {
   },
 
   async toggleDone({ id, userId }) {
-    const result = await prisma.$queryRaw<Todo[]>`
-      UPDATE todos
-      SET done = NOT done, updated_at = NOW()
-      WHERE id = ${id} AND user_id = ${userId}
-      RETURNING
-        id,
-        text,
-        done,
-        user_id AS "userId",
-        created_at AS "createdAt",
-        updated_at AS "updatedAt"
-    `;
-    return result[0] ?? null;
+    return prisma.$transaction(async (tx) => {
+      const result = await tx.$queryRaw<Todo[]>`
+        UPDATE todos
+        SET done = NOT done, updated_at = NOW()
+        WHERE id = ${id} AND user_id = ${userId}
+        RETURNING
+          id,
+          text,
+          done,
+          user_id AS "userId",
+          created_at AS "createdAt",
+          updated_at AS "updatedAt"
+      `;
+      const todo = result[0];
+      if (!todo) return null;
+      // Boolean flip — previous_value is derivable from new_value.done, so
+      // skipping it avoids the CTE + FOR UPDATE machinery a non-boolean PATCH
+      // would need to snapshot the prior row atomically.
+      await auditLog.write(tx, {
+        action: AuditAction.TodoUpdate,
+        outcome: 'success',
+        entityType: 'Todo',
+        entityId: todo.id,
+        changedBy: userId,
+        newValue: { id: todo.id, done: todo.done },
+      });
+      return todo;
+    });
   },
 
   async delete({ id, userId }) {
-    const result = await prisma.$queryRaw<Todo[]>`
-      DELETE FROM todos
-      WHERE id = ${id} AND user_id = ${userId}
-      RETURNING
-        id,
-        text,
-        done,
-        user_id AS "userId",
-        created_at AS "createdAt",
-        updated_at AS "updatedAt"
-    `;
-    return result[0] ?? null;
+    return prisma.$transaction(async (tx) => {
+      const result = await tx.$queryRaw<Todo[]>`
+        DELETE FROM todos
+        WHERE id = ${id} AND user_id = ${userId}
+        RETURNING
+          id,
+          text,
+          done,
+          user_id AS "userId",
+          created_at AS "createdAt",
+          updated_at AS "updatedAt"
+      `;
+      const todo = result[0];
+      if (!todo) return null;
+      await auditLog.write(tx, {
+        action: AuditAction.TodoDelete,
+        outcome: 'success',
+        entityType: 'Todo',
+        entityId: todo.id,
+        changedBy: userId,
+        previousValue: { id: todo.id, text: todo.text, done: todo.done },
+      });
+      return todo;
+    });
   },
 
   async deleteMany(filter = {}) {

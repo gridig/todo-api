@@ -24,9 +24,7 @@ const flattenErrorMessage = (err: unknown): string => {
   if (err.message) return err.message;
   const agg = (err as { errors?: unknown[] }).errors;
   if (Array.isArray(agg) && agg.length > 0) {
-    return agg
-      .map((e) => (e instanceof Error ? e.message : String(e)))
-      .join('; ');
+    return agg.map((e) => (e instanceof Error ? e.message : String(e))).join('; ');
   }
   return err.name;
 };
@@ -55,8 +53,7 @@ export async function connectWithRetry(
   options: ConnectWithRetryOptions = {},
 ): Promise<void> {
   const maxRetries = options.maxRetries ?? env.DB_CONNECT_MAX_RETRIES;
-  const initialDelayMs =
-    options.initialDelayMs ?? env.DB_CONNECT_INITIAL_DELAY_MS;
+  const initialDelayMs = options.initialDelayMs ?? env.DB_CONNECT_INITIAL_DELAY_MS;
   const maxDelayMs = options.maxDelayMs ?? MAX_DELAY_MS;
   const sleep = options.sleep ?? defaultSleep;
   const random = options.random ?? Math.random;
@@ -68,10 +65,7 @@ export async function connectWithRetry(
     try {
       await probe();
       if (attempt > 0) {
-        log.info(
-          { attempts: attempt + 1 },
-          `PostgreSQL connected after ${attempt + 1} attempts`,
-        );
+        log.info({ attempts: attempt + 1 }, `PostgreSQL connected after ${attempt + 1} attempts`);
       }
       return;
     } catch (err) {

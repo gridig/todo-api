@@ -6,31 +6,6 @@ This document outlines the infrastructure and production-readiness work required
 
 ## HIGH PRIORITY (Production Critical)
 
-### Audit Logging **[SOC 2]**
-
-**Priority**: High
-**Effort**: Medium
-**Impact**: High
-**SOC 2**: CC7.2 (Security Event Monitoring), CC7.4 (Incident Response Evidence), CC6.2 (Authentication Events)
-
-Current Pino logging is operational (request/response tracking). SOC 2 requires a separate, immutable audit trail of security-relevant events.
-
-- [ ] Store `audit_entries` as a TimescaleDB hypertable on the shared Postgres instance — swap the Docker image to `timescale/timescaledb:latest-pg16`, create the hypertable via raw-SQL migration with `chunk_time_interval => INTERVAL '7 days'`, and add `add_retention_policy('audit_entries', INTERVAL '1 year')`. Rationale, alternatives considered (InfluxDB, ClickHouse, QuestDB), shared-vs-dedicated-instance trade-offs, and chunk sizing are in [docs/databases.md](docs/databases.md).
-- [ ] Create `AuditEntry` model in Prisma schema with the following shape:
-  - Core fields: `id`, `entityType`, `entityId`, `action`, `changedBy`, `changedAt`, `sourceIp?`, `sessionId?`, `previousValue Json?`, `newValue Json?`
-  - Indexes: `(entityType, entityId, changedAt)`, `(changedBy, changedAt)`
-- [ ] Create `lib/auditLog.ts` service with a single `write()` method — no `update` or `delete` methods exposed (append-only at application level)
-- [ ] Log all authentication events: login success/failure, registration, token refresh, logout
-- [ ] Log all authorization events: access denied, cross-user access attempts
-- [ ] Log all data mutations: create, update, delete with actor, resource, timestamp, and full before/after entity snapshots (not deltas — full snapshots are simpler to implement and easier for auditors to read without reconstruction logic)
-- [ ] Log all administrative actions (when RBAC is implemented)
-- [ ] Include actor (userId), action, resource, timestamp, IP, and user-agent in every audit entry
-- [ ] Enforce database-level immutability: `REVOKE DELETE, UPDATE ON TABLE audit_entries FROM <app_db_role>` — application-level enforcement is necessary but not sufficient for SOC 2; a DB-level REVOKE means even a compromised application process cannot tamper with the audit trail **[SOC 2]**
-- [ ] Add audit log retention policy (minimum 1 year for SOC 2)
-- [ ] Add tests for audit log generation on all security-relevant endpoints
-
-**Why**: SOC 2 auditors require evidence of who did what and when. Operational logs are insufficient because they can be rotated, truncated, or lack the structured actor/action/resource format auditors expect. Audit logs must be tamper-evident and retained for the audit period.
-
 ### Database Backup & Disaster Recovery **[SOC 2]**
 
 **Priority**: High
@@ -196,6 +171,7 @@ Currently all authenticated users have identical permissions. SOC 2 requires pri
 - [ ] Add `role` to JWT payload or fetch on each request
 - [ ] Add tests for role-based authorization
 - [ ] Document role definitions and their permissions
+- [ ] **Emit audit-log entries for administrative actions** **[SOC 2]** — add an `admin.*` family of actions to `lib/auditActions.ts` (e.g. `admin.user.role.change`, `admin.user.delete`); wire emissions at each admin endpoint inside `prisma.$transaction` so an audit failure rolls back the privileged action. Migrated from the (now-deleted) Audit Logging roadmap section because the audit infrastructure is already shipped — this remaining bullet only becomes actionable once admin endpoints exist.
 
 **Why**: SOC 2 CC6.1 requires principle of least privilege. CC6.3 requires role-based access controls. Auditors expect to see a clear separation between administrative and standard user capabilities.
 
@@ -406,7 +382,7 @@ Startup resilience (decorrelated-jitter retry in `lib/dbConnect.ts`) and runtime
 
 ### Zero-Downtime Migration Strategy
 
-Multiple roadmap items require database schema migrations: **User Profile Management** (User `name` field), **JWT Refresh + Token Revocation** (RefreshToken model), **Role-Based Access Control** (User `role` field), **Audit Logging** (AuditEntry model). Once the API is serving live traffic, each of these needs a migration plan that avoids downtime. Document a standard approach (e.g., expand-contract pattern, Prisma `migrate deploy` in a pre-deploy step, backward-compatible column additions) before the first post-launch migration.
+Multiple roadmap items require database schema migrations: **User Profile Management** (User `name` field), **JWT Refresh + Token Revocation** (RefreshToken model), **Role-Based Access Control** (User `role` field). Once the API is serving live traffic, each of these needs a migration plan that avoids downtime. Document a standard approach (e.g., expand-contract pattern, Prisma `migrate deploy` in a pre-deploy step, backward-compatible column additions) before the first post-launch migration.
 
 ### PII in Request/Response Logs
 
@@ -429,7 +405,6 @@ For a SOC 2-compliant production deployment, implement in this order:
 ### Phase A: Security & Infrastructure Foundation (SOC 2 blocking)
 
 - ~~**Database Connection Resilience**~~ — Startup retry (decorrelated jitter) and runtime Prisma error classification (transient → 503 `DATABASE_UNAVAILABLE` + `Retry-After`) shipped. Optional circuit breaker tracked separately.
-- **Audit Logging** — Immutable audit trail with PostgreSQL REVOKE for tamper evidence
 - **Database Backup & DR** — Automated backups, defined RPO/RTO, tested restores
 - **Encryption at Rest** — PostgreSQL encryption, key management documentation
 - **Secrets Management** — Encrypted-at-rest secret store, indirection from deploy artifact, rotation runbook

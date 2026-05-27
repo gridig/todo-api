@@ -184,26 +184,22 @@ For the full testing guide (structure, helpers reference, writing tests, databas
 ### Critical Rules
 
 1. **Never log sensitive data**
-
    - Passwords, tokens, and authorization headers are automatically redacted
    - Redaction configured in `middleware/logger.ts`
    - Do not bypass or disable redaction
 
 2. **User isolation**
-
    - All database queries MUST include `user: req.userId`
    - Never allow cross-user data access
    - Example: `Todo.find({ user: req.userId })` not `Todo.find({})`
 
 3. **Password handling**
-
    - Passwords hashed with bcrypt (12 salt rounds, OWASP 2024+ floor)
    - Legacy cost-10 hashes are valid (bcrypt embeds cost in the hash); the login flow opportunistically re-hashes them at the current cost via `UserService.updatePassword`
    - Never store or return plain text passwords
    - Use `user.comparePassword()` method for verification
 
 4. **JWT tokens**
-
    - 24-hour expiration, HS256 only
    - Payload carries the standard `sub` claim (subject = user id), plus `iss` and `aud` (set via `JWT_ISSUER` / `JWT_AUDIENCE`)
    - Verification has 5-second `clockTolerance` for cross-instance drift
@@ -332,17 +328,17 @@ When an item from the roadmap is completed:
 
 Detailed reference docs live in `docs/`. The README is a landing page with summaries and links.
 
-| File                    | Content                                              |
-| ----------------------- | ---------------------------------------------------- |
-| `README.md`             | Quickstart, architecture, features, summary tables   |
-| `docs/api.md`           | Full API endpoint reference, error codes, status codes |
-| `docs/configuration.md` | All environment variables, CORS setup, `.env` examples |
-| `docs/docker.md`        | Docker build, run, production config, troubleshooting |
-| `docs/benchmarks.md`    | Benchmark methodology, k6 scripts, load levels, reproduction |
-| `docs/testing.md`               | Test framework, helpers, writing tests, CI config    |
-| `docs/runtime-correctness.md`   | Production runtime correctness plan (shutdown, pool, error handling) |
-| `docs/databases.md`             | Design memo for future audit-log (TimescaleDB) and search (pg_trgm → Elasticsearch) workstreams |
-| `ROADMAP.md`                    | Phased platform/production-readiness plan (SOC 2 priorities, open vs. done) |
+| File                          | Content                                                                                         |
+| ----------------------------- | ----------------------------------------------------------------------------------------------- |
+| `README.md`                   | Quickstart, architecture, features, summary tables                                              |
+| `docs/api.md`                 | Full API endpoint reference, error codes, status codes                                          |
+| `docs/configuration.md`       | All environment variables, CORS setup, `.env` examples                                          |
+| `docs/docker.md`              | Docker build, run, production config, troubleshooting                                           |
+| `docs/benchmarks.md`          | Benchmark methodology, k6 scripts, load levels, reproduction                                    |
+| `docs/testing.md`             | Test framework, helpers, writing tests, CI config                                               |
+| `docs/runtime-correctness.md` | Production runtime correctness plan (shutdown, pool, error handling)                            |
+| `docs/databases.md`           | Design memo for future audit-log (TimescaleDB) and search (pg_trgm → Elasticsearch) workstreams |
+| `ROADMAP.md`                  | Phased platform/production-readiness plan (SOC 2 priorities, open vs. done)                     |
 
 When changing API endpoints, update `docs/api.md`. When adding environment variables, update `docs/configuration.md`. When changing test infrastructure, update `docs/testing.md`. When changing benchmark infrastructure, update `docs/benchmarks.md`.
 

@@ -21,9 +21,7 @@ const run = async () => {
   const min = Math.min(...times);
   const max = Math.max(...times);
 
-  console.log(
-    `bcrypt hash+compare (${ITERATIONS} iterations, ${SALT_ROUNDS} rounds):`,
-  );
+  console.log(`bcrypt hash+compare (${ITERATIONS} iterations, ${SALT_ROUNDS} rounds):`);
   console.log(`  avg: ${avg.toFixed(2)}ms`);
   console.log(`  min: ${min.toFixed(2)}ms`);
   console.log(`  max: ${max.toFixed(2)}ms`);

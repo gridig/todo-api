@@ -1,10 +1,6 @@
 import { jest } from '@jest/globals';
 import request from 'supertest';
-import {
-  createTestApp,
-  connectTestDB,
-  disconnectTestDB,
-} from '../helpers/testSetup.js';
+import { createTestApp, connectTestDB, disconnectTestDB } from '../helpers/testSetup.js';
 import { probePool } from '../../lib/prisma.js';
 import { env } from '../../config/env.js';
 

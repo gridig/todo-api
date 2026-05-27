@@ -23,19 +23,12 @@ describe('parseOrigins', () => {
   });
 
   it('filters empty entries from comma-separated lists', () => {
-    expect(parseOrigins('http://a.com,,http://b.com')).toEqual([
-      'http://a.com',
-      'http://b.com',
-    ]);
+    expect(parseOrigins('http://a.com,,http://b.com')).toEqual(['http://a.com', 'http://b.com']);
   });
 
   it('throws when the wildcard is mixed with an explicit list', () => {
-    expect(() => parseOrigins('*,http://b.com')).toThrow(
-      /CORS_ORIGIN cannot mix the wildcard/,
-    );
-    expect(() => parseOrigins('http://a.com,*')).toThrow(
-      /CORS_ORIGIN cannot mix the wildcard/,
-    );
+    expect(() => parseOrigins('*,http://b.com')).toThrow(/CORS_ORIGIN cannot mix the wildcard/);
+    expect(() => parseOrigins('http://a.com,*')).toThrow(/CORS_ORIGIN cannot mix the wildcard/);
     expect(() => parseOrigins('http://a.com, * ,http://b.com')).toThrow(
       /CORS_ORIGIN cannot mix the wildcard/,
     );
@@ -49,10 +42,7 @@ describe('createOriginValidator', () => {
   });
 
   describe('allowlist mode', () => {
-    const validator = createOriginValidator(
-      ['http://a.com', 'http://b.com'],
-      true,
-    );
+    const validator = createOriginValidator(['http://a.com', 'http://b.com'], true);
 
     it('allows a request whose origin is in the allowlist', () => {
       const callback = jest.fn();
@@ -81,20 +71,14 @@ describe('createOriginValidator', () => {
     it('allows missing Origin header when allowNoOrigin=true', () => {
       const validator = createOriginValidator(['http://a.com'], true);
       const callback = jest.fn();
-      (validator as (origin: string | undefined, cb: typeof callback) => void)(
-        undefined,
-        callback,
-      );
+      (validator as (origin: string | undefined, cb: typeof callback) => void)(undefined, callback);
       expect(callback).toHaveBeenCalledWith(null, true);
     });
 
     it('rejects missing Origin header when allowNoOrigin=false', () => {
       const validator = createOriginValidator(['http://a.com'], false);
       const callback = jest.fn();
-      (validator as (origin: string | undefined, cb: typeof callback) => void)(
-        undefined,
-        callback,
-      );
+      (validator as (origin: string | undefined, cb: typeof callback) => void)(undefined, callback);
       expect(callback).toHaveBeenCalledWith(expect.any(Error), false);
       const errArg = callback.mock.calls[0]?.[0] as Error;
       expect(errArg.message).toMatch(/Requests without an Origin header/);

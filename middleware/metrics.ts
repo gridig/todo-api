@@ -1,10 +1,4 @@
-import {
-  Registry,
-  Counter,
-  Histogram,
-  Gauge,
-  collectDefaultMetrics,
-} from 'prom-client';
+import { Registry, Counter, Histogram, Gauge, collectDefaultMetrics } from 'prom-client';
 import type { Request, Response, NextFunction } from 'express';
 import { timingSafeEqual } from 'node:crypto';
 import { env } from '../config/env.js';
@@ -57,16 +51,22 @@ export const activeConnections = new Gauge({
   registers: [register],
 });
 
+// Audit-event writes outside a $transaction (auth events) cannot roll back
+// the user-facing flow on failure, so failures are caught and counted here
+// instead. Alert on this counter — a non-zero rate means audit trail gaps.
+export const auditWriteFailuresTotal = new Counter({
+  name: 'audit_write_failures_total',
+  help: 'Audit-log writes that failed outside a $transaction (auth events)',
+  labelNames: ['reason'] as const,
+  registers: [register],
+});
+
 // db_pool_* gauges live in lib/prisma.ts (next to the pool they observe) and
 // register against the shared `register` exported above.
 
 // --- Middleware: instrument every request ---
 
-export const metricsMiddleware = (
-  req: Request,
-  res: Response,
-  next: NextFunction,
-): void => {
+export const metricsMiddleware = (req: Request, res: Response, next: NextFunction): void => {
   activeConnections.inc();
   const end = httpRequestDuration.startTimer();
 
@@ -95,11 +95,7 @@ const expectedTokenBuffer: Buffer | null = env.METRICS_TOKEN
   ? Buffer.from(env.METRICS_TOKEN, 'utf8')
   : null;
 
-export const metricsAuthMiddleware = (
-  req: Request,
-  res: Response,
-  next: NextFunction,
-): void => {
+export const metricsAuthMiddleware = (req: Request, res: Response, next: NextFunction): void => {
   if (!expectedTokenBuffer) {
     next();
     return;
@@ -138,10 +134,7 @@ export const metricsAuthMiddleware = (
 
 // --- Handler: GET /metrics ---
 
-export const metricsHandler = async (
-  _req: Request,
-  res: Response,
-): Promise<void> => {
+export const metricsHandler = async (_req: Request, res: Response): Promise<void> => {
   res.set('Content-Type', register.contentType);
   res.end(await register.metrics());
 };
@@ -154,8 +147,5 @@ const normalizeRoute = (req: Request): string => {
     return req.baseUrl + (req.route.path === '/' ? '' : req.route.path);
   }
   // Collapse UUID-like segments to :id to avoid high-cardinality labels
-  return req.path.replace(
-    /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi,
-    ':id',
-  );
+  return req.path.replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, ':id');
 };

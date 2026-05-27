@@ -10,7 +10,6 @@ import {
 import { classifyPrismaError } from '../errors/database.js';
 import type { RequestWithLogger } from '../types/index.js';
 
-
 // Type guard for errors with a code property (Prisma errors, etc.)
 // Prisma 7 + driver adapter puts constraint info under driverAdapterError.cause.constraint.fields
 // rather than the legacy meta.target field — handle both shapes.
@@ -61,11 +60,7 @@ const isPayloadTooLargeError = (error: unknown): error is PayloadTooLargeError =
   );
 };
 
-const respondWithAppError = (
-  res: Response,
-  requestId: string,
-  appError: AppError,
-): void => {
+const respondWithAppError = (res: Response, requestId: string, appError: AppError): void => {
   if (appError instanceof ServiceUnavailableError) {
     res.setHeader('Retry-After', String(appError.retryAfterSeconds));
   }
@@ -75,12 +70,11 @@ const respondWithAppError = (
   });
 };
 
-
 export const errorHandler = (
   err: Error,
   req: RequestWithLogger,
   res: Response,
-  _next: NextFunction
+  _next: NextFunction,
 ): void => {
   const { log, id: requestId } = req;
   // Log error with full context
@@ -94,7 +88,7 @@ export const errorHandler = (
       params: req.params,
       query: req.query,
     },
-    err.message || 'Unhandled error'
+    err.message || 'Unhandled error',
   );
 
   // Handle our custom AppError instances
@@ -164,7 +158,7 @@ export const errorHandler = (
 
   // Handle JSON parsing errors
   if (isJsonParseError(err)) {
-     res.status(400).json({
+    res.status(400).json({
       error: {
         code: 'INVALID_JSON',
         message: 'Invalid JSON in request body',
