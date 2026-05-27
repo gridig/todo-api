@@ -1,12 +1,21 @@
 import request from 'supertest';
 import type { Application } from 'express';
-import { createApp } from '../../app.js';
+import { createApp } from '@/app.js';
+import { connectTestDB, disconnectTestDB } from '../helpers/testSetup.js';
 
 describe('Route Smoke Tests', () => {
   let app: Application;
 
-  beforeAll(() => {
+  beforeAll(async () => {
+    // connect/disconnect — the unauth'd /todos hits emit an audit_entries
+    // INSERT via middleware/auth.ts (AuthNoToken), so the prisma pool gets
+    // used and must be torn down to let the process exit cleanly.
+    await connectTestDB();
     app = createApp();
+  });
+
+  afterAll(async () => {
+    await disconnectTestDB();
   });
 
   describe('Auth Routes', () => {

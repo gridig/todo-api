@@ -6,8 +6,8 @@ import {
   disconnectTestDB,
 } from '../../helpers/testSetup.js';
 import { createTestTodos } from '../../helpers/todoHelpers.js';
-import TodoService from '../../../models/Todo.js';
-import UserService from '../../../models/User.js';
+import TodoService from '@/models/Todo.js';
+import UserService from '@/models/User.js';
 import type { Application } from 'express';
 
 const app: Application = createTestApp();
@@ -32,9 +32,7 @@ describe('GET /todos - List Todos', () => {
 
   describe('Success Cases', () => {
     it('should return paginated envelope with empty data when user has no todos', async () => {
-      const response = await request(app)
-        .get('/todos')
-        .set('Authorization', `Bearer ${authToken}`);
+      const response = await request(app).get('/todos').set('Authorization', `Bearer ${authToken}`);
 
       expect(response.status).toBe(200);
       expect(response.body.data).toHaveLength(0);
@@ -45,9 +43,7 @@ describe('GET /todos - List Todos', () => {
     it('should return todos in data array with correct meta', async () => {
       await createTestTodos(userId, 3);
 
-      const response = await request(app)
-        .get('/todos')
-        .set('Authorization', `Bearer ${authToken}`);
+      const response = await request(app).get('/todos').set('Authorization', `Bearer ${authToken}`);
 
       expect(response.status).toBe(200);
       expect(response.body.data).toHaveLength(3);
@@ -96,9 +92,7 @@ describe('GET /todos - List Todos', () => {
     it('should default to limit 20 and not exceed it', async () => {
       await createTestTodos(userId, 25);
 
-      const response = await request(app)
-        .get('/todos')
-        .set('Authorization', `Bearer ${authToken}`);
+      const response = await request(app).get('/todos').set('Authorization', `Bearer ${authToken}`);
 
       expect(response.status).toBe(200);
       expect(response.body.data).toHaveLength(20);
@@ -110,9 +104,7 @@ describe('GET /todos - List Todos', () => {
       const { userId: otherUserId } = await createTestUser();
       await createTestTodos(otherUserId, 3);
 
-      const response = await request(app)
-        .get('/todos')
-        .set('Authorization', `Bearer ${authToken}`);
+      const response = await request(app).get('/todos').set('Authorization', `Bearer ${authToken}`);
 
       expect(response.status).toBe(200);
       expect(response.body.data).toHaveLength(2);
@@ -153,9 +145,7 @@ describe('GET /todos - List Todos', () => {
       const response = await request(app).get('/todos');
 
       expect(response.status).toBe(401);
-      expect(response.body.error.message).toBe(
-        'No authentication token provided'
-      );
+      expect(response.body.error.message).toBe('No authentication token provided');
     });
   });
 });

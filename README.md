@@ -18,22 +18,26 @@ From a clean checkout, with Node.js 24+ and PostgreSQL available:
    cp .env.example .env
    ```
 
-   Edit `.env`: set `DATABASE_URL` to your PostgreSQL instance and `JWT_SECRET` to a secure value (32+ characters). For a local Postgres:
+   Edit `.env` to set `JWT_SECRET` (32+ chars) and the two database URLs. The runtime app uses `db_app`; migrations use the schema-owning `db_admin` role so it can run DDL and the `REVOKE` that makes `audit_entries` append-only:
 
    ```env
-   DATABASE_URL="postgresql://user:password@localhost:5432/todo_api"
+   DATABASE_URL="postgresql://db_app:db_app_dev@localhost:5432/todo_api"
+   DATABASE_MIGRATE_URL="postgresql://db_admin:db_admin_dev@localhost:5432/todo_api"
    JWT_SECRET=your-super-secret-key-min-32-chars
    ```
 
+   The three roles (`db_admin`, `db_app`, `db_auditor`) are created by `prisma/sql/bootstrap_roles.sql`, which runs automatically the first time the Docker Compose Postgres volume initialises. See [`docs/configuration.md`](docs/configuration.md#database-roles) for the role model.
+
 3. **Create database and run migrations**
 
-   Ensure PostgreSQL is running, then:
+   Start Postgres (Docker Compose mounts `bootstrap_roles.sql` into `/docker-entrypoint-initdb.d/` so a fresh volume provisions the three roles automatically), then apply migrations:
 
    ```bash
-   pnpm exec prisma migrate dev
+   docker compose up -d postgres
+   pnpm exec prisma migrate deploy
    ```
 
-   This applies the schema and generates the Prisma client.
+   `prisma.config.ts` picks `DATABASE_MIGRATE_URL` if set, falling back to `DATABASE_URL`. For an existing dev DB where tables are already owned by the superuser, `docker compose down -v` first so the volume re-initialises against the bootstrap script.
 
 4. **Start the API**
    ```bash
@@ -82,18 +86,19 @@ curl http://localhost:3001/todos \
 ├─────────────────────────────────────────────────────────────────┤
 │                     Middleware Pipeline                         │
 │  ┌───────────────────────────────────────────────────────────┐  │
-│  │  1. Request ID Generation (requestId.ts)                  │  │
-│  │  2. Metrics Instrumentation (metrics.ts)                  │  │
-│  │  3. Echo Route (/echo — benchmark only, no logging)       │  │
-│  │  4. Request Logger (requestLogger.ts)                     │  │
-│  │  5. CORS Handler (cors.ts)                                │  │
-│  │  6. Health Routes (/health — exempt from rate limiting)   │  │
-│  │  7. Metrics Route (/metrics — optional token auth)        │  │
-│  │  8. Global Rate Limiter (rateLimiter.ts)                  │  │
-│  │  9. JSON Body Parser                                      │  │
-│  │  10. Route Handlers (per-route auth, validation, limits)  │  │
-│  │  11. 404 Handler                                          │  │
-│  │  12. Error Handler (errorHandler.ts)                      │  │
+│  │  1.  Request ID Generation (requestId.ts)                 │  │
+│  │  2.  Request Context — ALS scope (requestContext.ts)      │  │
+│  │  3.  Metrics Instrumentation (metrics.ts)                 │  │
+│  │  4.  Echo Route (/echo — benchmark only, no logging)      │  │
+│  │  5.  Request Logger (requestLogger.ts)                    │  │
+│  │  6.  CORS Handler (cors.ts)                               │  │
+│  │  7.  Health Routes (/health — exempt from rate limiting)  │  │
+│  │  8.  Metrics Route (/metrics — optional token auth)       │  │
+│  │  9.  Global Rate Limiter (rateLimiter.ts)                 │  │
+│  │  10. JSON Body Parser                                     │  │
+│  │  11. Route Handlers (per-route auth, validation, limits)  │  │
+│  │  12. 404 Handler                                          │  │
+│  │  13. Error Handler (errorHandler.ts)                      │  │
 │  └───────────────────────────────────────────────────────────┘  │
 ├─────────────────────────────────────────────────────────────────┤
 │                          Routes Layer                           │
@@ -106,9 +111,9 @@ curl http://localhost:3001/todos \
 │        │              ▼              ▼                          │
 │        │      ┌───────────────────────────┐                     │
 │        │      │     Models Layer          │                     │
-│        │      │  ┌─────────┐ ┌─────────┐ │                      │
-│        │      │  │ User.ts │ │ Todo.ts │ │                      │
-│        │      │  └────┬────┘ └────┬────┘ │                      │
+│        │      │  ┌─────────┐ ┌─────────┐  │                     │
+│        │      │  │ User.ts │ │ Todo.ts │  │                     │
+│        │      │  └────┬────┘ └────┬────┘  │                     │
 │        │      └───────┼───────────┼───────┘                     │
 └────────┼──────────────┼───────────┼─────────────────────────────┘
          │              │           │
@@ -121,18 +126,24 @@ curl http://localhost:3001/todos \
          │              └─────┬──────┘
          │                    │
          ▼                    ▼
-┌────────────────┐   ┌────────────────┐
-│  Health Checks │   │  PostgreSQL    │
-│   - Liveness   │   │   - Users      │
-│   - Readiness  │   │   - Todos      │
-│                │   │                │
-└────────────────┘   └────────────────┘
+┌────────────────┐   ┌──────────────────────────────┐
+│  Health Checks │   │  PostgreSQL (TimescaleDB)    │
+│   - Liveness   │   │   - users        (db_admin)  │
+│   - Readiness  │   │   - todos        (db_admin)  │
+│                │   │   - audit_entries hypertable │
+│                │   │     INSERT/SELECT for db_app │
+│                │   │     UPDATE/DELETE REVOKEd    │
+│                │   │     SELECT for db_auditor    │
+└────────────────┘   └──────────────────────────────┘
 
 Key Components:
-• Config (env.ts): Environment variable validation
+• Config (env.ts): Environment variable validation; two DSNs (DATABASE_URL → db_app, DATABASE_MIGRATE_URL → db_admin)
 • Errors: Custom error classes (AppError, AuthError, ValidationError, etc.)
 • Logging: Structured JSON logs (Pino) with request correlation
-• Security: JWT auth, bcrypt hashing, rate limiting, input validation
+• Security: JWT auth, bcrypt hashing, rate limiting, input validation, three-role DB model
+• Audit Log: lib/auditLog.ts (write inside $transaction, writeOrLog for non-blocking auth events); emissions in middleware/auth.ts, routes/auth.ts, routes/todos.ts, models/Todo.ts
+• Request Context: lib/requestContext.ts AsyncLocalStorage holds requestId / ip / userAgent / userId for downstream audit writes
+• Startup Probes: index.ts refuses to boot if TimescaleDB extension is missing or audit_entries UPDATE does not return 42501
 • Types: Full TypeScript type definitions (types/index.ts, types/express.d.ts)
 ```
 
@@ -161,7 +172,8 @@ Key Components:
 - **Clustering**: Optional multi-process mode via `CLUSTER_WORKERS` (auto-detect CPUs or exact count)
 - **Environment Variable Validation**: Runtime validation with envalid (startup failures for misconfiguration)
 - **CORS Configuration**: Configurable Cross-Origin Resource Sharing with origin validation
-- **Prometheus Metrics**: Application and process metrics via `/metrics` endpoint (request duration, throughput, DB query timing, rate limit hits, active connections)
+- **Prometheus Metrics**: Application and process metrics via `/metrics` endpoint (request duration, throughput, DB query timing, rate limit hits, active connections, `audit_write_failures_total`)
+- **Immutable Audit Log** (SOC 2 CC7.2 / CC7.4 / CC6.2): every authentication event, cross-user access denial, and todo mutation writes a row to the `audit_entries` TimescaleDB hypertable. The runtime DB role (`db_app`) can `INSERT` and `SELECT` only — `UPDATE`/`DELETE`/`TRUNCATE` are REVOKED so a compromised app cannot tamper with history. Mutation audits run inside `prisma.$transaction` so an audit failure rolls the mutation back; auth-event audits fire-and-forget and surface failures through the Prometheus counter. Two startup probes refuse to boot if either guarantee is missing
 - **TypeScript**: Full type safety with strict mode, custom type definitions, and ES Modules
 
 ### Logging System
@@ -212,10 +224,11 @@ All environment variables are validated at startup with `envalid`. The server wi
 
 **Required**:
 
-| Variable       | Description                    | Example                                              |
-| -------------- | ------------------------------ | ---------------------------------------------------- |
-| `DATABASE_URL` | PostgreSQL connection string   | `postgresql://user:password@localhost:5432/todo-api` |
-| `JWT_SECRET`   | JWT signing secret (32+ chars) | `your-super-secret-jwt-key-min-32-chars`             |
+| Variable               | Description                                                                               | Example                                                      |
+| ---------------------- | ----------------------------------------------------------------------------------------- | ------------------------------------------------------------ |
+| `DATABASE_URL`         | Runtime app connection (use the restricted `db_app` role)                                 | `postgresql://db_app:db_app_dev@localhost:5432/todo_api`     |
+| `DATABASE_MIGRATE_URL` | Admin DSN used only by `prisma migrate deploy` (`db_admin`). Falls back to `DATABASE_URL` | `postgresql://db_admin:db_admin_dev@localhost:5432/todo_api` |
+| `JWT_SECRET`           | JWT signing secret (32+ chars)                                                            | `your-super-secret-jwt-key-min-32-chars`                     |
 
 **Optional**: `PORT`, `NODE_ENV`, `LOG_LEVEL`, `CORS_ORIGIN`, database pool tuning, clustering, and more.
 
@@ -232,6 +245,11 @@ See [`docs/configuration.md`](docs/configuration.md) for the full reference incl
 - Environment variable validation at startup (prevents misconfiguration)
 - User isolation at database level
 - No cross-user data access
+- **Three-role DB model** (`db_admin` / `db_app` / `db_auditor`) so SOC 2 audit-trail immutability is enforced by Postgres `REVOKE`, not by app code that an attacker could bypass
+- **Immutable audit log** of authentication, authorization, and data-mutation events in a TimescaleDB hypertable with 1-year retention. Mutation audits live inside `prisma.$transaction` so an audit failure rolls back the mutation; auth audits fire-and-forget and alert via `audit_write_failures_total`
+- **Startup tamper-evidence probe**: the server attempts `UPDATE audit_entries SET action='probe' WHERE FALSE` at boot and refuses to start unless Postgres rejects it with `42501 permission denied` — catches a missing `REVOKE` or a wrong `DATABASE_URL` (superuser DSN) before the process serves traffic
+- **TimescaleDB extension probe** at boot — the audit retention policy is meaningless without the extension, so the server refuses to start if it's not installed
+- **Login-failure email hashing**: failed-login audit rows store `sha256(email)` in `metadata`, not the raw email, so the audit table never becomes an enumeration oracle for guessed addresses
 
 ### Best Practices
 
@@ -310,41 +328,49 @@ todo-api/
 │   │   └── todoHelpers.ts     # Todo-specific helpers
 │   ├── integration/           # API endpoint tests
 │   └── unit/                  # Isolated component tests
-├── types/                      # TypeScript type definitions
-│   ├── index.ts               # Core types (models, requests, responses)
-│   └── express.d.ts           # Express augmentation
-├── errors/                     # Custom error classes
-│   └── index.ts               # AppError, AuthError, ValidationError, NotFoundError, ConflictError, and 12 more
-├── middleware/                 # Express middleware
-│   ├── auth.ts                # JWT authentication
-│   ├── cors.ts                # CORS configuration and origin validation
-│   ├── errorHandler.ts        # Centralized error handling
-│   ├── logger.ts              # Pino logger configuration
-│   ├── metrics.ts             # Prometheus metrics (prom-client)
-│   ├── rateLimiter.ts         # Rate limiting
-│   ├── requestId.ts           # Request ID tracking
-│   ├── requestLogger.ts       # Request/response logging
-│   └── validation.ts          # Joi validation schemas
-├── models/                     # Data access layer (Prisma wrappers)
-│   ├── User.ts                # User model with password hashing
-│   └── Todo.ts                # Todo model
-├── routes/                     # Express routes
-│   ├── auth.ts                # Authentication routes
-│   ├── echo.ts                # Benchmark echo endpoint
-│   ├── health.ts              # Health check endpoints
-│   └── todos.ts               # Todo CRUD routes
-├── config/                     # Configuration
-│   └── env.ts                 # Environment variable validation (envalid)
-├── lib/                        # Shared utilities
-│   └── prisma.ts              # Prisma client singleton
+├── src/                        # Application source
+│   ├── app.ts                 # Express app configuration
+│   ├── index.ts               # Server startup and DB connection
+│   ├── types/                 # TypeScript type definitions
+│   │   ├── index.ts           # Core types (models, requests, responses)
+│   │   └── express.d.ts       # Express augmentation
+│   ├── errors/                # Custom error classes
+│   │   └── index.ts           # AppError, AuthError, ValidationError, NotFoundError, ConflictError, and 12 more
+│   ├── middleware/            # Express middleware
+│   │   ├── auth.ts            # JWT authentication + AuthNoToken/AuthTokenInvalid audit emission
+│   │   ├── cors.ts            # CORS configuration and origin validation
+│   │   ├── errorHandler.ts    # Centralized error handling
+│   │   ├── logger.ts          # Pino logger configuration
+│   │   ├── metrics.ts         # Prometheus metrics incl. audit_write_failures_total
+│   │   ├── rateLimiter.ts     # Rate limiting
+│   │   ├── requestContext.ts  # AsyncLocalStorage wrapper (requestId/ip/userAgent for downstream audit writes)
+│   │   ├── requestId.ts       # Request ID tracking
+│   │   ├── requestLogger.ts   # Request/response logging
+│   │   └── validation.ts      # Joi validation schemas
+│   ├── models/                # Data access layer (Prisma wrappers)
+│   │   ├── User.ts            # User model with password hashing
+│   │   └── Todo.ts            # Todo model (mutations wrapped in $transaction with audit insert)
+│   ├── routes/                # Express routes
+│   │   ├── auth.ts            # Authentication routes (Register/Login success+failure audit emissions)
+│   │   ├── echo.ts            # Benchmark echo endpoint
+│   │   ├── health.ts          # Health check endpoints
+│   │   └── todos.ts           # Todo CRUD routes (AccessDenied audit at cross-user 404 sites)
+│   ├── config/                # Configuration
+│   │   └── env.ts             # Environment variable validation (envalid)
+│   └── lib/                   # Shared utilities
+│       ├── prisma.ts          # Prisma client singleton
+│       ├── dbConnect.ts       # Startup connect-with-retry (decorrelated jitter)
+│       ├── requestContext.ts  # AsyncLocalStorage instance + getRequestContext() reader
+│       ├── auditActions.ts    # Audit action vocabulary constants
+│       └── auditLog.ts        # write() (transactional) and writeOrLog() (non-blocking)
 ├── prisma/                     # Prisma schema and migrations
-│   ├── schema.prisma          # Database schema
+│   ├── schema.prisma          # Database schema (incl. AuditEntry model)
 │   ├── generated/             # Generated Prisma types
-│   └── migrations/            # Database migrations
+│   ├── migrations/            # Database migrations (incl. 20260526000001_add_audit_entries)
+│   └── sql/
+│       └── bootstrap_roles.sql # Creates db_admin / db_app / db_auditor + default privileges
 ├── logs/                       # Log files (generated)
 ├── dist/                       # Compiled JavaScript (generated)
-├── app.ts                      # Express app configuration
-├── index.ts                    # Server startup and DB connection
 ├── tsconfig.json              # TypeScript configuration
 ├── tsconfig.test.json         # TypeScript config for tests
 ├── jest.config.ts             # Jest configuration

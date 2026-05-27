@@ -5,8 +5,8 @@ import {
   connectTestDB,
   disconnectTestDB,
 } from '../../helpers/testSetup.js';
-import TodoService from '../../../models/Todo.js';
-import UserService from '../../../models/User.js';
+import TodoService from '@/models/Todo.js';
+import UserService from '@/models/User.js';
 import type { Application } from 'express';
 
 const app: Application = createTestApp();
@@ -65,9 +65,7 @@ describe('POST /todos - Create Todo', () => {
     });
 
     it('should reject request without auth token', async () => {
-      const response = await request(app)
-        .post('/todos')
-        .send({ text: 'New Todo' });
+      const response = await request(app).post('/todos').send({ text: 'New Todo' });
 
       expect(response.status).toBe(401);
     });

@@ -261,20 +261,52 @@ Health check endpoints for monitoring and container orchestration. These endpoin
 
 ---
 
-### Readiness Probe
+### Readiness Probe (public)
 
 **GET** `/health/ready`
 
-**Description**: Readiness check -- is the server ready to handle traffic right now? Returns 503 when (a) PostgreSQL is unreachable or (b) the DB connection pool is saturated (every connection busy, pool fully grown, clients already queued). Memory and CPU pressure are reported as observational sub-checks but do not affect the readiness verdict — load average lingers after bursts and high heap doesn't mean the process can't serve requests (use the `/health` liveness probe for OOM-style concerns instead).
+**Description**: Readiness check -- is the server ready to handle traffic right now? Returns 503 when (a) PostgreSQL is unreachable or (b) the DB connection pool is saturated (every connection busy, pool fully grown, clients already queued). Memory and CPU pressure are reported as observational sub-checks on `/health/ready/detailed` but do not affect the readiness verdict — load average lingers after bursts and high heap doesn't mean the process can't serve requests (use the `/health` liveness probe for OOM-style concerns instead).
 
 The database reachability check runs `SELECT 1` on a **dedicated single-connection pool** that is never shared with application traffic. This means probe latency is bounded by `DB_PROBE_TIMEOUT_MS` (default 1s) regardless of how saturated the application pool is, so successive probes can't drift past `failureThreshold × timeoutSeconds` under sustained load.
+
+The public response is intentionally lean — the orchestrator only needs the HTTP code. Internals (pool, memory, CPU) live behind the authenticated `/health/ready/detailed` route below so unauthenticated callers cannot recon process-internal load.
 
 **Response** (200 OK - Healthy):
 
 ```json
 {
   "status": "ok",
-  "timestamp": "2024-12-26T10:30:00.000Z",
+  "timestamp": "2026-05-18T10:30:00.000Z"
+}
+```
+
+**Response** (503 Service Unavailable - Degraded):
+
+```json
+{
+  "status": "degraded",
+  "timestamp": "2026-05-18T10:30:00.000Z"
+}
+```
+
+The 503 response includes a `Retry-After` header — `5` seconds for pool saturation (recovers quickly), `30` seconds for an unreachable database. For operators who need to know _which_ condition tripped, hit `/health/ready/detailed`.
+
+---
+
+### Readiness Probe (authenticated, detailed)
+
+**GET** `/health/ready/detailed`
+
+**Auth**: bearer token via `Authorization: Bearer <METRICS_TOKEN>` — same gate as `GET /metrics`. Returns 401 without a token, 401 with a wrong token (constant-time compare).
+
+**Description**: Same probe logic as `/health/ready`, but returns the full payload including database state, pool sizing, memory, and CPU. Intended for operators and dashboards, not for orchestrator probes.
+
+**Response** (200 OK - Healthy):
+
+```json
+{
+  "status": "ok",
+  "timestamp": "2026-05-18T10:30:00.000Z",
   "uptime": 3600,
   "version": "1.0.0",
   "environment": "production",
@@ -316,19 +348,19 @@ The database reachability check runs `SELECT 1` on a **dedicated single-connecti
 
 **Response** (503 Service Unavailable - Degraded):
 
-Returned when the database is unreachable **or** the DB pool is saturated. The body's sub-checks identify which condition tripped readiness — the example below shows pool saturation.
+Returned when the database is unreachable **or** the DB pool is saturated. The body's sub-checks identify which condition tripped readiness — the example below shows pool saturation. The `Retry-After` header semantics are the same as the public endpoint.
 
 ```json
 {
   "status": "degraded",
-  "timestamp": "2024-12-26T10:30:00.000Z",
+  "timestamp": "2026-05-18T10:30:00.000Z",
   "uptime": 3600,
   "version": "1.0.0",
   "environment": "production",
   "checks": {
     "database": { "status": "ok", "state": "connected" },
-    "memory":   { "status": "ok", "...": "..." },
-    "cpu":      { "status": "ok", "...": "..." },
+    "memory": { "status": "ok", "...": "..." },
+    "cpu": { "status": "ok", "...": "..." },
     "pool": {
       "status": "error",
       "total": 10,
@@ -342,17 +374,15 @@ Returned when the database is unreachable **or** the DB pool is saturated. The b
 }
 ```
 
-The response includes a `Retry-After` header — `5` seconds for pool saturation (recovers quickly), `30` seconds for an unreachable database.
-
 **Check Thresholds**:
 
-| Check      | Threshold                                                                  | Sub-check status on breach | Affects readiness? |
-| ---------- | -------------------------------------------------------------------------- | -------------------------- | ------------------ |
-| PostgreSQL | `SELECT 1` query must succeed                                              | `error`                    | **Yes (503)**      |
-| DB Pool    | `idle === 0` AND `total >= max` AND `waiting > 0` (saturation)             | `error`                    | **Yes (503)**      |
-| DB Pool    | Utilization ≥ 80% but not saturated                                        | `warning`                  | No                 |
-| Memory     | Heap usage < 90%                                                           | `warning`                  | No                 |
-| CPU        | 1-min load average < CPU count                                             | `warning`                  | No                 |
+| Check      | Threshold                                                      | Sub-check status on breach | Affects readiness? |
+| ---------- | -------------------------------------------------------------- | -------------------------- | ------------------ |
+| PostgreSQL | `SELECT 1` query must succeed                                  | `error`                    | **Yes (503)**      |
+| DB Pool    | `idle === 0` AND `total >= max` AND `waiting > 0` (saturation) | `error`                    | **Yes (503)**      |
+| DB Pool    | Utilization ≥ 80% but not saturated                            | `warning`                  | No                 |
+| Memory     | Heap usage < 90%                                               | `warning`                  | No                 |
+| CPU        | 1-min load average < CPU count                                 | `warning`                  | No                 |
 
 Only the rows marked **Yes** flip the overall body `status` to `"degraded"` and emit the `Health check - readiness probe failed` WARN log. Pool saturation responses include `Retry-After: 5` (recovers quickly as queries drain); DB-unreachable responses include `Retry-After: 30`.
 
@@ -525,21 +555,21 @@ All error responses follow a structured format with error codes for client-side 
 
 ### Error Codes Reference
 
-| Code                  | HTTP Status | Description                                    |
-| --------------------- | ----------- | ---------------------------------------------- |
-| `INVALID_CREDENTIALS` | 401         | Wrong email or password                        |
-| `NO_TOKEN`            | 401         | No authentication token provided               |
-| `INVALID_TOKEN`       | 401         | Token is invalid or expired                    |
-| `TODO_NOT_FOUND`      | 404         | Todo does not exist or belongs to another user |
-| `ROUTE_NOT_FOUND`     | 404         | API endpoint does not exist                    |
-| `DUPLICATE_EMAIL`     | 409         | Email already registered                       |
-| `DUPLICATE_VALUE`     | 409         | Unique constraint violation                    |
-| `INVALID_ID_FORMAT`   | 400         | Invalid UUID format                            |
-| `INVALID_JSON`        | 400         | Request body contains invalid JSON             |
-| `FOREIGN_KEY_CONSTRAINT` | 409      | Foreign-key constraint violation               |
-| `SERVICE_UNAVAILABLE` | 503         | Generic transient unavailability — retry with `Retry-After` |
-| `DATABASE_UNAVAILABLE` | 503        | Database unreachable or pool exhausted — retry with `Retry-After` |
-| `INTERNAL_ERROR`      | 500         | Unexpected server error                        |
+| Code                     | HTTP Status | Description                                                       |
+| ------------------------ | ----------- | ----------------------------------------------------------------- |
+| `INVALID_CREDENTIALS`    | 401         | Wrong email or password                                           |
+| `NO_TOKEN`               | 401         | No authentication token provided                                  |
+| `INVALID_TOKEN`          | 401         | Token is invalid or expired                                       |
+| `TODO_NOT_FOUND`         | 404         | Todo does not exist or belongs to another user                    |
+| `ROUTE_NOT_FOUND`        | 404         | API endpoint does not exist                                       |
+| `DUPLICATE_EMAIL`        | 409         | Email already registered                                          |
+| `DUPLICATE_VALUE`        | 409         | Unique constraint violation                                       |
+| `INVALID_ID_FORMAT`      | 400         | Invalid UUID format                                               |
+| `INVALID_JSON`           | 400         | Request body contains invalid JSON                                |
+| `FOREIGN_KEY_CONSTRAINT` | 409.        | Foreign-key constraint violation                                  |
+| `SERVICE_UNAVAILABLE`    | 503         | Generic transient unavailability — retry with `Retry-After`       |
+| `DATABASE_UNAVAILABLE`   | 503         | Database unreachable or pool exhausted — retry with `Retry-After` |
+| `INTERNAL_ERROR`         | 500         | Unexpected server error                                           |
 
 ### Status Codes
 

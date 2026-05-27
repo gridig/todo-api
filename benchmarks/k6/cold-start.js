@@ -19,7 +19,9 @@ export default function () {
       if (res.status === 200) {
         ready = true;
         const elapsed = Date.now() - startTime;
-        console.log(`Cold start: first successful health check after ${elapsed}ms (${attempts + 1} attempts)`);
+        console.log(
+          `Cold start: first successful health check after ${elapsed}ms (${attempts + 1} attempts)`,
+        );
       }
     } catch {
       // Server not up yet

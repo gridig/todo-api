@@ -3,11 +3,11 @@ import type { Request, Response, NextFunction } from 'express';
 
 const TOKEN = 'test-metrics-token';
 
-jest.unstable_mockModule('../../../config/env.js', () => ({
+jest.unstable_mockModule('@/config/env.js', () => ({
   env: { METRICS_TOKEN: TOKEN },
 }));
 
-const { metricsAuthMiddleware } = await import('../../../middleware/metrics.js');
+const { metricsAuthMiddleware } = await import('@/middleware/metrics.js');
 
 describe('metricsAuthMiddleware', () => {
   /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -37,8 +37,25 @@ describe('metricsAuthMiddleware', () => {
     expect(next).not.toHaveBeenCalled();
   });
 
-  it('rejects a wrong token with INVALID_TOKEN', () => {
+  it('rejects a wrong token (different length) with INVALID_TOKEN', () => {
     req.headers.authorization = 'Bearer wrong-token';
+
+    metricsAuthMiddleware(req as Request, res as Response, next as NextFunction);
+
+    expect(res.status).toHaveBeenCalledWith(401);
+    expect(res.json).toHaveBeenCalledWith(
+      expect.objectContaining({
+        error: expect.objectContaining({ code: 'INVALID_TOKEN' }),
+      }),
+    );
+    expect(next).not.toHaveBeenCalled();
+  });
+
+  it('rejects a same-length wrong token with INVALID_TOKEN (timingSafeEqual path)', () => {
+    // Same length as TOKEN ('test-metrics-token' = 18 chars) to exercise the
+    // timingSafeEqual branch rather than the length short-circuit.
+    expect('xxxxxxxxxxxxxxxxxx'.length).toBe(TOKEN.length);
+    req.headers.authorization = 'Bearer xxxxxxxxxxxxxxxxxx';
 
     metricsAuthMiddleware(req as Request, res as Response, next as NextFunction);
 

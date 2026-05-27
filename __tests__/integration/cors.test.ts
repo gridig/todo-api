@@ -1,8 +1,8 @@
 import request from 'supertest';
 import type { Application } from 'express';
-import { createApp } from '../../app.js';
+import { createApp } from '@/app.js';
 import { createTestUser, disconnectTestDB } from '../helpers/testSetup.js';
-import UserService from '../../models/User.js';
+import UserService from '@/models/User.js';
 
 describe('CORS Integration', () => {
   let app: Application;
@@ -26,9 +26,7 @@ describe('CORS Integration', () => {
         .set('Access-Control-Request-Method', 'GET');
 
       expect(response.status).toBe(204);
-      expect(response.headers['access-control-allow-origin']).toBe(
-        'http://localhost:3000'
-      );
+      expect(response.headers['access-control-allow-origin']).toBe('http://localhost:3000');
       expect(response.headers['access-control-allow-methods']).toContain('GET');
     });
   });
@@ -41,9 +39,7 @@ describe('CORS Integration', () => {
         .set('Authorization', `Bearer ${authToken}`);
 
       expect(response.status).toBe(200);
-      expect(response.headers['access-control-allow-origin']).toBe(
-        'http://localhost:3000'
-      );
+      expect(response.headers['access-control-allow-origin']).toBe('http://localhost:3000');
     });
 
     it('should include CORS headers in error response', async () => {
@@ -52,28 +48,20 @@ describe('CORS Integration', () => {
         .set('Origin', 'http://localhost:3000')
         .send({ email: 'invalid@test.com', password: 'wrong' });
 
-      expect(response.headers['access-control-allow-origin']).toBe(
-        'http://localhost:3000'
-      );
+      expect(response.headers['access-control-allow-origin']).toBe('http://localhost:3000');
     });
   });
 
   describe('Origin Validation', () => {
     it('should allow requests from allowed origins', async () => {
-      const response = await request(app)
-        .get('/health')
-        .set('Origin', 'http://localhost:3000');
+      const response = await request(app).get('/health').set('Origin', 'http://localhost:3000');
 
       expect(response.status).toBe(200);
-      expect(response.headers['access-control-allow-origin']).toBe(
-        'http://localhost:3000'
-      );
+      expect(response.headers['access-control-allow-origin']).toBe('http://localhost:3000');
     });
 
     it('should reject requests from disallowed origins', async () => {
-      const response = await request(app)
-        .get('/health')
-        .set('Origin', 'http://malicious-site.com');
+      const response = await request(app).get('/health').set('Origin', 'http://malicious-site.com');
 
       expect(response.headers['access-control-allow-origin']).toBeUndefined();
     });

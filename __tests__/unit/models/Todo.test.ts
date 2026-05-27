@@ -1,11 +1,7 @@
-import {
-  connectTestDB,
-  disconnectTestDB,
-  generateUniqueId,
-} from '../../helpers/testSetup.js';
-import TodoService from '../../../models/Todo.js';
-import UserService from '../../../models/User.js';
-import type { User } from '../../../types/index.js';
+import { connectTestDB, disconnectTestDB, generateUniqueId } from '../../helpers/testSetup.js';
+import TodoService from '@/models/Todo.js';
+import UserService from '@/models/User.js';
+import type { User } from '@/types/index.js';
 
 let savedUser: User;
 

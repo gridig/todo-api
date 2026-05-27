@@ -23,9 +23,7 @@ const LEVEL = __ENV.LOAD_LEVEL || 'medium';
 const level = LOAD_LEVELS[LEVEL];
 
 if (!level) {
-  throw new Error(
-    `Unknown LOAD_LEVEL: ${LEVEL}. Use: low, medium, high, overload`,
-  );
+  throw new Error(`Unknown LOAD_LEVEL: ${LEVEL}. Use: low, medium, high, overload`);
 }
 
 export const options = {
@@ -117,8 +115,7 @@ export default function (data) {
 
 export function handleSummary(data) {
   return {
-    [`benchmarks/results/application-performance-${LEVEL}.json`]:
-      JSON.stringify(data, null, 2),
+    [`benchmarks/results/application-performance-${LEVEL}.json`]: JSON.stringify(data, null, 2),
     stdout: textSummary(data, { indent: '  ', enableColors: true }),
   };
 }

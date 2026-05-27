@@ -11,14 +11,27 @@ The application uses `envalid` to validate all environment variables at startup,
 - Clear error messages with examples for misconfigured values
 - Prevents runtime failures due to configuration issues
 
-**Implementation**: See `config/env.ts` for the validation schema and `.env.example` for a template.
+**Implementation**: See `src/config/env.ts` for the validation schema and `.env.example` for a template.
 
 ## Required Variables
 
-| Variable       | Type   | Description                                                                                                 | Example                                              |
-| -------------- | ------ | ----------------------------------------------------------------------------------------------------------- | ---------------------------------------------------- |
-| `DATABASE_URL` | URL    | PostgreSQL connection string                                                                                | `postgresql://user:password@localhost:5432/todo-api` |
-| `JWT_SECRET`   | String | Secret key for JWT tokens. **Minimum 32 characters** — the server fails fast at startup if this is shorter. | `your-super-secret-jwt-key-min-32-chars`             |
+| Variable               | Type   | Description                                                                                                                                  | Example                                                          |
+| ---------------------- | ------ | -------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------- |
+| `DATABASE_URL`         | URL    | PostgreSQL connection string for the runtime app role (`db_app`). The audit-log REVOKE depends on this not being a superuser.                | `postgresql://db_app:db_app_dev@localhost:5432/todo_api`         |
+| `DATABASE_MIGRATE_URL` | URL    | Optional admin DSN used **only** by `prisma migrate deploy` (`db_admin` — owns the schema, runs DDL + GRANT/REVOKE). Falls back to `DATABASE_URL` if unset. | `postgresql://db_admin:db_admin_dev@localhost:5432/todo_api`     |
+| `JWT_SECRET`           | String | Secret key for JWT tokens. **Minimum 32 characters** — the server fails fast at startup if this is shorter.                                  | `your-super-secret-jwt-key-min-32-chars`                         |
+
+### Database roles
+
+Audit-log immutability requires three Postgres roles so SOC 2 tamper-evidence (CC7.2 / CC7.4) is enforced at the DB layer, not just the app:
+
+| Role         | Connect via                | What it can do                                                                                                                                |
+| ------------ | -------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| `db_admin`   | `DATABASE_MIGRATE_URL`     | Owns the `public` schema; CREATE/ALTER/DROP and GRANT/REVOKE. Used only by `prisma migrate deploy`.                                           |
+| `db_app`     | `DATABASE_URL`             | Runtime CRUD on app tables; `INSERT` + `SELECT` on `audit_entries` (UPDATE/DELETE/TRUNCATE are REVOKED so an app-layer compromise can't tamper). |
+| `db_auditor` | external auditor sessions  | `SELECT` on `audit_entries` only.                                                                                                              |
+
+Roles are created by `prisma/sql/bootstrap_roles.sql`. The Docker Compose Postgres service mounts this file into `/docker-entrypoint-initdb.d/`, so a fresh `docker compose up` provisions everything. CI runs the same file via `psql`. Production (Railway) creates the roles via the platform secrets UI; the bootstrap SQL is not run there.
 
 Generate a secure JWT secret for production:
 
@@ -52,16 +65,16 @@ node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 
 Pool sizing rule: `DB_POOL_MAX × replica_count × CLUSTER_WORKERS` must stay well below the PostgreSQL `max_connections` limit (default 100), with headroom for migrations and admin connections.
 
-| Variable                   | Type   | Default | Description                                                                        |
-| -------------------------- | ------ | ------- | ---------------------------------------------------------------------------------- |
-| `DB_POOL_MAX`              | Number | `10`    | Max connections per instance                                                       |
-| `DB_POOL_MIN`              | Number | `2`     | Min idle connections to keep warm                                                  |
-| `DB_CONNECTION_TIMEOUT_MS` | Number | `5000`  | ms to wait for a free pool connection                                              |
-| `DB_IDLE_TIMEOUT_MS`       | Number | `10000` | ms before an idle connection is released                                           |
-| `DB_QUERY_TIMEOUT_MS`      | Number | `5000`  | ms a single query may run before the connection is killed and returned to the pool |
-| `DB_PROBE_TIMEOUT_MS`      | Number | `1000`  | ms ceiling for the readiness probe's `SELECT 1` (runs on a dedicated single-connection pool, not the application pool — see Observability) |
-| `DB_CONNECT_MAX_RETRIES`   | Number | `5`     | Retries after the initial `$connect` at startup before giving up. `0` disables retry (fail fast)                                          |
-| `DB_CONNECT_INITIAL_DELAY_MS` | Number | `1000`  | Base delay (ms) for the first startup-connect retry; subsequent delays use decorrelated jitter capped at 30 s                            |
+| Variable                      | Type   | Default | Description                                                                                                                                |
+| ----------------------------- | ------ | ------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `DB_POOL_MAX`                 | Number | `10`    | Max connections per instance                                                                                                               |
+| `DB_POOL_MIN`                 | Number | `2`     | Min idle connections to keep warm                                                                                                          |
+| `DB_CONNECTION_TIMEOUT_MS`    | Number | `5000`  | ms to wait for a free pool connection                                                                                                      |
+| `DB_IDLE_TIMEOUT_MS`          | Number | `10000` | ms before an idle connection is released                                                                                                   |
+| `DB_QUERY_TIMEOUT_MS`         | Number | `5000`  | ms a single query may run before the connection is killed and returned to the pool                                                         |
+| `DB_PROBE_TIMEOUT_MS`         | Number | `1000`  | ms ceiling for the readiness probe's `SELECT 1` (runs on a dedicated single-connection pool, not the application pool — see Observability) |
+| `DB_CONNECT_MAX_RETRIES`      | Number | `5`     | Retries after the initial `$connect` at startup before giving up. `0` disables retry (fail fast)                                           |
+| `DB_CONNECT_INITIAL_DELAY_MS` | Number | `1000`  | Base delay (ms) for the first startup-connect retry; subsequent delays use decorrelated jitter capped at 30 s                              |
 
 #### Startup connection retry
 
@@ -118,10 +131,10 @@ When clustering is enabled, each worker maintains its own database connection po
 
 ### Metrics
 
-| Variable             | Type    | Default     | Description                                                                                                                                                                                                                                              |
-| -------------------- | ------- | ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `METRICS_TOKEN`      | String  | `undefined` | Optional bearer token to protect `GET /metrics`. When set, requests must include `Authorization: Bearer <token>` (header-only — query-string `?token=` is **not** accepted, to avoid leaking the secret into access/proxy logs). Required in production. |
-| `DISABLE_DB_METRICS` | Boolean | `false`     | When `true`, disables Prisma query-duration instrumentation (`dbQueryDuration`). Use for benchmarks to avoid per-query timer overhead.                                                                                                                   |
+| Variable             | Type    | Default     | Description                                                                                                                                                                                                                                                                                                                                                                                               |
+| -------------------- | ------- | ----------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `METRICS_TOKEN`      | String  | `undefined` | Bearer token to protect `GET /metrics`. When set, requests must include `Authorization: Bearer <token>` (header-only — query-string `?token=` is **not** accepted, to avoid leaking the secret into access/proxy logs). **Required in production** — startup aborts if `NODE_ENV=production` and this is unset or shorter than 32 characters. The comparison is constant-time (`crypto.timingSafeEqual`). |
+| `DISABLE_DB_METRICS` | Boolean | `false`     | When `true`, disables Prisma query-duration instrumentation (`dbQueryDuration`). Use for benchmarks to avoid per-query timer overhead.                                                                                                                                                                                                                                                                    |
 
 **Generating a production token**:
 
@@ -133,9 +146,9 @@ Store the value in your secrets manager (see `#7.5` in `ROADMAP.md`) and inject 
 
 ### Rate Limiting
 
-| Variable             | Type    | Default | Description                                                         |
-| -------------------- | ------- | ------- | ------------------------------------------------------------------- |
-| `DISABLE_RATE_LIMIT` | Boolean | `false` | Disables all rate limiters. Use when running load tests/benchmarks. |
+| Variable             | Type    | Default | Description                                                                                                                                                 |
+| -------------------- | ------- | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `DISABLE_RATE_LIMIT` | Boolean | `false` | Disables all rate limiters. Use when running load tests/benchmarks. **Refused in production** — startup aborts if this is `true` and `NODE_ENV=production`. |
 
 All rate limiters (`auth`, `write`, `read`, `global`, `register`, `health`) emit the IETF `draft-7` `RateLimit-*` response headers (`RateLimit-Limit`, `RateLimit-Remaining`, `RateLimit-Reset`, and `Retry-After` on 429s). Legacy `X-RateLimit-*` headers are not emitted.
 
@@ -143,9 +156,9 @@ The `/health/ready` endpoint is rate-limited at **60 requests/minute/IP** (`heal
 
 ### Debug & Benchmark Routes
 
-| Variable             | Type    | Default                              | Description                                                                                                                                                                                                                                            |
-| -------------------- | ------- | ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `ENABLE_ECHO_ROUTES` | Boolean | `true` in non-prod, `false` in prod  | Mount the `/echo` benchmark routes. `/echo` bypasses logging, rate limiting, and JSON parsing, so it must only be reachable on a benchmark process. The default mirrors `NODE_ENV` so production processes hide it unless this flag is explicitly set. |
+| Variable             | Type    | Default                             | Description                                                                                                                                                                                                                                                                                                                                                            |
+| -------------------- | ------- | ----------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ENABLE_ECHO_ROUTES` | Boolean | `true` in non-prod, `false` in prod | Mount the `/echo` benchmark routes. `/echo` bypasses logging and rate limiting. JSON body parsing now honors `BODY_LIMIT` (was: 100kb library default). The default mirrors `NODE_ENV` so production processes hide it unless this flag is explicitly set. If set true in production, startup logs a loud `WARNING` — intended only for dedicated benchmark processes. |
 
 See [benchmarks.md → Rate Limiting](benchmarks.md#rate-limiting) for the flag combination required when benchmarking against a production-mode process.
 
@@ -213,7 +226,7 @@ CORS_CREDENTIALS=true
 
 ## Health Check Thresholds
 
-The `/health/ready` endpoint returns HTTP 503 only when a **binding constraint** trips: the database is unreachable, or the connection pool is saturated. Memory and CPU are reported as observational sub-checks — they can flip a sub-check to `warning` but never to `error`, and never affect the overall readiness verdict. Thresholds are hardcoded in `routes/health.ts` (kept as constants rather than env vars to discourage per-deploy variance in what "healthy" means).
+The `/health/ready` endpoint returns HTTP 503 only when a **binding constraint** trips: the database is unreachable, or the connection pool is saturated. Memory and CPU are reported as observational sub-checks — they can flip a sub-check to `warning` but never to `error`, and never affect the overall readiness verdict. Thresholds are hardcoded in `src/routes/health.ts` (kept as constants rather than env vars to discourage per-deploy variance in what "healthy" means).
 
 | Check    | Threshold                                                      | Sub-check status on breach | Affects readiness? | Source                                    |
 | -------- | -------------------------------------------------------------- | -------------------------- | ------------------ | ----------------------------------------- |
@@ -229,11 +242,12 @@ The DB reachability check runs against a **dedicated single-connection probe poo
 
 ## Security Headers & Proxy Trust
 
-The application wires the following defenses in `app.ts`:
+The application wires the following defenses in `src/app.ts`:
 
 - **Helmet** (`helmet()` with defaults) sets the full hardening header set: `Strict-Transport-Security` (HSTS, `max-age=15552000; includeSubDomains`), `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`, `Cross-Origin-Opener-Policy`, `Cross-Origin-Resource-Policy`, and a strict `Content-Security-Policy`. HSTS only takes effect over HTTPS, so it is a no-op in local development and relies on the load balancer terminating TLS in front of the API in production.
 - **`trust proxy = 1`** trusts one upstream proxy hop (ALB / ingress). Required for `req.ip` to reflect the real client IP rather than the proxy, so per-client rate limiting and audit log `sourceIp` are correct.
-- **Echo endpoint (`/echo`)** is gated by `ENABLE_ECHO_ROUTES`, which defaults to `true` in non-production and `false` in production. The endpoint bypasses logging, rate limiting, and JSON parsing, so it must only ever be reachable on a dedicated benchmark process — never on a production instance serving real traffic. See [Debug & Benchmark Routes](#debug--benchmark-routes).
+- **Echo endpoint (`/echo`)** is gated by `ENABLE_ECHO_ROUTES`, which defaults to `true` in non-production and `false` in production. The endpoint bypasses logging and rate limiting (JSON parsing now honours `BODY_LIMIT`), so it must only ever be reachable on a dedicated benchmark process — never on a production instance serving real traffic. To enable in production, pair `ENABLE_ECHO_ROUTES=true` with `ENABLE_ECHO_ROUTES_PRODUCTION_CONFIRM=true`; either flag alone aborts startup. See [Debug & Benchmark Routes](#debug--benchmark-routes).
+- **Readiness probe (`/health/ready`)** is split into a public lean shape (`{ status, timestamp }`) and an authenticated `/health/ready/detailed` route gated by the `METRICS_TOKEN` bearer token. Orchestrators probe the lean path (200/503 + `Retry-After`); operators and dashboards hit `/detailed` for pool/memory/CPU internals. Splitting denies unauthenticated callers the recon signal previously available for DoS targeting. See [API Reference — Health Check](api.md#health-check).
 
 ## Full `.env` Example
 
@@ -242,8 +256,9 @@ The application wires the following defenses in `app.ts`:
 NODE_ENV=development
 PORT=3001
 
-# Database
-DATABASE_URL=postgresql://user:password@localhost:5432/todo-api
+# Database (db_app for runtime, db_admin for migrations)
+DATABASE_URL=postgresql://db_app:db_app_dev@localhost:5432/todo_api
+DATABASE_MIGRATE_URL=postgresql://db_admin:db_admin_dev@localhost:5432/todo_api
 
 # JWT (minimum 32 characters — server fails to start otherwise)
 JWT_SECRET=your-super-secret-jwt-key-change-this-in-production

@@ -1,6 +1,6 @@
 services:
   postgres:
-    image: postgres:16
+    image: timescale/timescaledb:latest-pg16
     container_name: todo-postgres
     environment:
       POSTGRES_USER: postgres
@@ -10,6 +10,9 @@ services:
       - '5432:5432'
     volumes:
       - postgres_data:/var/lib/postgresql/data
+      # initdb only runs on a fresh volume — `docker compose down -v` if you
+      # need to re-bootstrap roles on an existing dev DB.
+      - ./prisma/sql/bootstrap_roles.sql:/docker-entrypoint-initdb.d/01-bootstrap_roles.sql:ro
     healthcheck:
       test: ['CMD-SHELL', 'pg_isready -U postgres']
       interval: 5s
@@ -39,8 +42,12 @@ services:
     environment:
       NODE_ENV: production
       PORT: 3001
-      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/todo_api
-      JWT_SECRET: docker-compose-dev-secret-change-in-production-min-32-chars
+      DATABASE_URL: postgresql://db_app:db_app_dev@postgres:5432/todo_api
+      DATABASE_MIGRATE_URL: postgresql://db_admin:db_admin_dev@postgres:5432/todo_api
+      # Read JWT_SECRET from the host environment (export it or define it in .env).
+      # Fails compose-up with a clear error if unset — refuses to silently ship
+      # a publicly-known placeholder secret alongside NODE_ENV=production.
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET must be set in your shell or .env (>=32 chars)}
       LOG_LEVEL: info
       # REDIS_URL: redis://redis:6379  # Uncomment when distributed rate limiting is implemented (#13)
     depends_on:

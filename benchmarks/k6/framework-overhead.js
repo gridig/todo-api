@@ -2,12 +2,7 @@ import http from 'k6/http';
 import { check } from 'k6';
 import { Rate, Trend } from 'k6/metrics';
 import { textSummary } from 'https://jslib.k6.io/k6-summary/0.1.0/index.js';
-import {
-  BASE_URL,
-  LOAD_LEVELS,
-  WARMUP_DURATION,
-  WARMUP_VUS,
-} from './config.js';
+import { BASE_URL, LOAD_LEVELS, WARMUP_DURATION, WARMUP_VUS } from './config.js';
 
 /* global __ENV */
 const errorRate = new Rate('error_rate');
@@ -17,9 +12,7 @@ const LEVEL = __ENV.LOAD_LEVEL || 'medium';
 const level = LOAD_LEVELS[LEVEL];
 
 if (!level) {
-  throw new Error(
-    `Unknown LOAD_LEVEL: ${LEVEL}. Use: low, medium, high, overload`,
-  );
+  throw new Error(`Unknown LOAD_LEVEL: ${LEVEL}. Use: low, medium, high, overload`);
 }
 
 export const options = {
@@ -59,11 +52,7 @@ export default function () {
 
 export function handleSummary(data) {
   return {
-    [`benchmarks/results/framework-overhead-${LEVEL}.json`]: JSON.stringify(
-      data,
-      null,
-      2,
-    ),
+    [`benchmarks/results/framework-overhead-${LEVEL}.json`]: JSON.stringify(data, null, 2),
     stdout: textSummary(data, { indent: '  ', enableColors: true }),
   };
 }

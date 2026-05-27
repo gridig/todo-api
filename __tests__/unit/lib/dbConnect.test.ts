@@ -1,8 +1,5 @@
 import { jest } from '@jest/globals';
-import {
-  connectWithRetry,
-  computeNextDelay,
-} from '../../../lib/dbConnect.js';
+import { connectWithRetry, computeNextDelay } from '@/lib/dbConnect.js';
 import type { Logger } from 'pino';
 
 const makeLogger = (): Logger => {
@@ -65,9 +62,7 @@ describe('connectWithRetry', () => {
 
   it('throws the last error after exhausting retries', async () => {
     const finalError = new Error('final boom');
-    const probe = jest
-      .fn<() => Promise<void>>()
-      .mockRejectedValue(finalError);
+    const probe = jest.fn<() => Promise<void>>().mockRejectedValue(finalError);
     const sleep = jest.fn<(ms: number) => Promise<void>>().mockResolvedValue(undefined);
     const log = makeLogger();
 
@@ -85,9 +80,7 @@ describe('connectWithRetry', () => {
   });
 
   it('makes only one attempt when maxRetries is 0', async () => {
-    const probe = jest
-      .fn<() => Promise<void>>()
-      .mockRejectedValue(new Error('boom'));
+    const probe = jest.fn<() => Promise<void>>().mockRejectedValue(new Error('boom'));
     const sleep = jest.fn<(ms: number) => Promise<void>>().mockResolvedValue(undefined);
     const log = makeLogger();
 
@@ -130,9 +123,7 @@ describe('connectWithRetry', () => {
   });
 
   it('uses decorrelated jitter starting from initialDelayMs', async () => {
-    const probe = jest
-      .fn<() => Promise<void>>()
-      .mockRejectedValue(new Error('boom'));
+    const probe = jest.fn<() => Promise<void>>().mockRejectedValue(new Error('boom'));
     const sleeps: number[] = [];
     const sleep = jest.fn<(ms: number) => Promise<void>>(async (ms) => {
       sleeps.push(ms);
@@ -197,8 +188,7 @@ describe('connectWithRetry', () => {
     expect(log.warn).toHaveBeenCalledWith(
       expect.objectContaining({
         errName: 'AggregateError',
-        errMessage:
-          'connect ECONNREFUSED ::1:9999; connect ECONNREFUSED 127.0.0.1:9999',
+        errMessage: 'connect ECONNREFUSED ::1:9999; connect ECONNREFUSED 127.0.0.1:9999',
       }),
       expect.any(String),
     );

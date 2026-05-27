@@ -1,5 +1,5 @@
-import type { Todo } from '../../types/index.js';
-import TodoService from '../../models/Todo.js';
+import type { Todo } from '@/types/index.js';
+import TodoService from '@/models/Todo.js';
 import { randomUUID } from 'crypto';
 
 // Create test todos with specific data
@@ -17,7 +17,11 @@ export async function createTestTodos(userId: string, count: number = 2): Promis
 }
 
 // Create a single test todo
-export async function createTestTodo(userId: string, text: string = 'Test Todo', done: boolean = false): Promise<Todo> {
+export async function createTestTodo(
+  userId: string,
+  text: string = 'Test Todo',
+  done: boolean = false,
+): Promise<Todo> {
   return TodoService.create({ text, userId, done });
 }
 

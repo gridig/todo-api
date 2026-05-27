@@ -31,3 +31,24 @@ model User {
 
   @@map("users")
 }
+
+model AuditEntry {
+  id            String    @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  changedAt     DateTime  @default(now()) @map("changed_at") @db.Timestamptz
+  entityType    String    @map("entity_type")
+  entityId      String?   @map("entity_id") @db.Uuid
+  action        String
+  outcome       String
+  outcomeReason String?   @map("outcome_reason")
+  changedBy     String?   @map("changed_by") @db.Uuid
+  sourceIp      String?   @map("source_ip") @db.Inet
+  userAgent     String?   @map("user_agent")
+  requestId     String?   @map("request_id")
+  previousValue Json?     @map("previous_value")
+  newValue      Json?     @map("new_value")
+  metadata      Json?
+
+  // Hypertable requires the time column in the primary key
+  @@id([id, changedAt])
+  @@map("audit_entries")
+}

@@ -1,19 +1,17 @@
 import { jest } from '@jest/globals';
 import request from 'supertest';
-import {
-  createTestApp,
-  connectTestDB,
-  disconnectTestDB,
-} from '../helpers/testSetup.js';
+import { createTestApp, connectTestDB, disconnectTestDB } from '../helpers/testSetup.js';
 import {
   getPoolMetrics,
   logPoolHealth,
   POOL_UTILIZATION_WARN_THRESHOLD,
   pool,
-} from '../../lib/prisma.js';
-import logger from '../../middleware/logger.js';
+} from '@/lib/prisma.js';
+import logger from '@/middleware/logger.js';
+import { env } from '@/config/env.js';
 
 const app = createTestApp();
+const bearer = `Bearer ${env.METRICS_TOKEN}`;
 
 describe('Database Pool Observability', () => {
   beforeAll(async () => {
@@ -37,9 +35,7 @@ describe('Database Pool Observability', () => {
       });
       expect(metrics.totalConnections).toBeGreaterThanOrEqual(0);
       expect(metrics.idleConnections).toBeGreaterThanOrEqual(0);
-      expect(metrics.idleConnections).toBeLessThanOrEqual(
-        metrics.totalConnections,
-      );
+      expect(metrics.idleConnections).toBeLessThanOrEqual(metrics.totalConnections);
       expect(metrics.maxConnections).toBeGreaterThan(0);
       expect(metrics.utilization).toBeGreaterThanOrEqual(0);
       expect(metrics.utilization).toBeLessThanOrEqual(100);
@@ -50,9 +46,11 @@ describe('Database Pool Observability', () => {
     });
   });
 
-  describe('GET /health/ready — pool check', () => {
+  describe('GET /health/ready/detailed — pool check', () => {
     it('includes checks.pool with the expected fields', async () => {
-      const response = await request(app).get('/health/ready');
+      const response = await request(app)
+        .get('/health/ready/detailed')
+        .set('Authorization', bearer);
 
       expect(response.status).toBe(200);
       expect(response.body.checks.pool).toEqual({
@@ -69,18 +67,14 @@ describe('Database Pool Observability', () => {
     it('returns 503 with pool.status="error" when the pool is saturated', async () => {
       // Saturation: pool fully grown, no idle slots, clients queued.
       const maxConnections = getPoolMetrics().maxConnections;
-      const totalSpy = jest
-        .spyOn(pool, 'totalCount', 'get')
-        .mockReturnValue(maxConnections);
-      const idleSpy = jest
-        .spyOn(pool, 'idleCount', 'get')
-        .mockReturnValue(0);
-      const waitingSpy = jest
-        .spyOn(pool, 'waitingCount', 'get')
-        .mockReturnValue(7);
+      const totalSpy = jest.spyOn(pool, 'totalCount', 'get').mockReturnValue(maxConnections);
+      const idleSpy = jest.spyOn(pool, 'idleCount', 'get').mockReturnValue(0);
+      const waitingSpy = jest.spyOn(pool, 'waitingCount', 'get').mockReturnValue(7);
 
       try {
-        const response = await request(app).get('/health/ready');
+        const response = await request(app)
+          .get('/health/ready/detailed')
+          .set('Authorization', bearer);
 
         expect(response.status).toBe(503);
         expect(response.headers['retry-after']).toBe('5');
@@ -104,18 +98,14 @@ describe('Database Pool Observability', () => {
       // 90% utilization, but at least one idle slot — next request is served
       // immediately, so not a readiness failure.
       const maxConnections = getPoolMetrics().maxConnections;
-      const totalSpy = jest
-        .spyOn(pool, 'totalCount', 'get')
-        .mockReturnValue(maxConnections);
-      const idleSpy = jest
-        .spyOn(pool, 'idleCount', 'get')
-        .mockReturnValue(1);
-      const waitingSpy = jest
-        .spyOn(pool, 'waitingCount', 'get')
-        .mockReturnValue(0);
+      const totalSpy = jest.spyOn(pool, 'totalCount', 'get').mockReturnValue(maxConnections);
+      const idleSpy = jest.spyOn(pool, 'idleCount', 'get').mockReturnValue(1);
+      const waitingSpy = jest.spyOn(pool, 'waitingCount', 'get').mockReturnValue(0);
 
       try {
-        const response = await request(app).get('/health/ready');
+        const response = await request(app)
+          .get('/health/ready/detailed')
+          .set('Authorization', bearer);
 
         expect(response.status).toBe(200);
         expect(response.body.status).toBe('ok');
@@ -130,18 +120,14 @@ describe('Database Pool Observability', () => {
     it('stays 200 when pool is at min capacity but idle (no saturation)', async () => {
       // Pool warmed only to min; even with waiting>0 this is a transient
       // warm-up state and the pool can still grow — not saturation.
-      const totalSpy = jest
-        .spyOn(pool, 'totalCount', 'get')
-        .mockReturnValue(2);
-      const idleSpy = jest
-        .spyOn(pool, 'idleCount', 'get')
-        .mockReturnValue(0);
-      const waitingSpy = jest
-        .spyOn(pool, 'waitingCount', 'get')
-        .mockReturnValue(3);
+      const totalSpy = jest.spyOn(pool, 'totalCount', 'get').mockReturnValue(2);
+      const idleSpy = jest.spyOn(pool, 'idleCount', 'get').mockReturnValue(0);
+      const waitingSpy = jest.spyOn(pool, 'waitingCount', 'get').mockReturnValue(3);
 
       try {
-        const response = await request(app).get('/health/ready');
+        const response = await request(app)
+          .get('/health/ready/detailed')
+          .set('Authorization', bearer);
 
         // total (2) < max (whatever DB_POOL_MAX is, usually 10) → pool can
         // still grow → not saturated → still ready.
@@ -156,7 +142,7 @@ describe('Database Pool Observability', () => {
 
   describe('GET /metrics — pool gauges', () => {
     it('exposes the four db_pool_* gauges', async () => {
-      const response = await request(app).get('/metrics');
+      const response = await request(app).get('/metrics').set('Authorization', bearer);
 
       expect(response.status).toBe(200);
       expect(response.text).toContain('db_pool_total_connections');
@@ -191,12 +177,8 @@ describe('Database Pool Observability', () => {
       const warnSpy = jest.spyOn(logger, 'warn').mockImplementation(() => {});
 
       // Force utilization > 80% by reporting all-but-one connection as active.
-      const totalSpy = jest
-        .spyOn(pool, 'totalCount', 'get')
-        .mockReturnValue(10);
-      const idleSpy = jest
-        .spyOn(pool, 'idleCount', 'get')
-        .mockReturnValue(1);
+      const totalSpy = jest.spyOn(pool, 'totalCount', 'get').mockReturnValue(10);
+      const idleSpy = jest.spyOn(pool, 'idleCount', 'get').mockReturnValue(1);
 
       try {
         logPoolHealth();

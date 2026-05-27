@@ -3,9 +3,7 @@
     "target": "ES2022",
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
-    "lib": [
-      "ES2022"
-    ],
+    "lib": ["ES2022"],
     "outDir": "./dist",
     "rootDir": ".",
     "strict": true,
@@ -23,22 +21,11 @@
     "noFallthroughCasesInSwitch": true,
     "noUncheckedIndexedAccess": true,
     "exactOptionalPropertyTypes": true,
-    "typeRoots": [
-      "./node_modules/@types",
-      "./types"
-    ],
+    "typeRoots": ["./node_modules/@types", "./src/types"],
     "paths": {
-      "@/*": [
-        "./*"
-      ]
+      "@/*": ["./src/*"]
     }
   },
-  "include": [
-    "**/*.ts",
-    "prisma/generated/**/*.ts"
-  ],
-  "exclude": [
-    "node_modules",
-    "dist"
-  ]
+  "include": ["**/*.ts", "prisma/generated/**/*.ts"],
+  "exclude": ["node_modules", "dist"]
 }

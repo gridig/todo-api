@@ -1,0 +1,110 @@
+import jwt from 'jsonwebtoken';
+import { Response, NextFunction } from 'express';
+import { env } from '../config/env.js';
+import { NoTokenError, InvalidTokenError } from '../errors/index.js';
+import { requestContext } from '../lib/requestContext.js';
+import { writeOrLog } from '../lib/auditLog.js';
+import { AuditAction } from '../lib/auditActions.js';
+import prisma from '../lib/prisma.js';
+import type { RequestWithLogger } from '../types/index.js';
+
+const TOKEN_REASON_MAX_LEN = 100;
+// Generous cap — real JWTs run ~1–2 KiB. Treats oversized headers as empty so
+// we never feed an attacker-controlled multi-MB string into toLowerCase().
+const MAX_AUTH_HEADER_LEN = 8192;
+const BEARER_SCHEME = 'bearer ';
+
+export const auth = (req: RequestWithLogger, res: Response, next: NextFunction): void => {
+  const { log, id: requestId } = req;
+  try {
+    const rawHeader = req.header('Authorization') ?? '';
+    const authHeader = rawHeader.length > MAX_AUTH_HEADER_LEN ? '' : rawHeader;
+    const token = authHeader.toLowerCase().startsWith(BEARER_SCHEME)
+      ? authHeader.slice(BEARER_SCHEME.length).trim()
+      : '';
+
+    if (!token) {
+      log.warn(
+        {
+          path: req.path,
+          ip: req.ip,
+        },
+        'Authentication failed - no token provided',
+      );
+      void writeOrLog(
+        prisma,
+        { action: AuditAction.AuthNoToken, outcome: 'failure', outcomeReason: 'no-auth-header' },
+        log,
+      );
+      const error = new NoTokenError();
+      res.status(error.statusCode).json({
+        ...error.toJSON(),
+        requestId,
+      });
+      return;
+    }
+
+    // The iss/aud check is gated behind JWT_VERIFY_REQUIRE_CLAIMS during the
+    // grace window: deploy with the flag false so legacy { userId } tokens
+    // issued before the iss/aud rollout still verify; flip to true after a
+    // full 24h-expiry cycle so every in-flight token now carries the new
+    // claims. 5s clockTolerance absorbs small clock drift across instances.
+    const verifyOptions: jwt.VerifyOptions = {
+      algorithms: ['HS256'],
+      clockTolerance: 5,
+      ...(env.JWT_VERIFY_REQUIRE_CLAIMS
+        ? { issuer: env.JWT_ISSUER, audience: env.JWT_AUDIENCE }
+        : {}),
+    };
+    const decoded = jwt.verify(token, env.JWT_SECRET, verifyOptions);
+
+    if (typeof decoded !== 'object' || decoded === null) {
+      throw new Error('Invalid JWT payload');
+    }
+
+    // Accept the new RFC-7519 `sub` claim and the legacy `userId` field
+    // during the grace window. Reject if neither yields a string.
+    const payload = decoded as { sub?: unknown; userId?: unknown };
+    const userId =
+      typeof payload.sub === 'string'
+        ? payload.sub
+        : typeof payload.userId === 'string'
+          ? payload.userId
+          : undefined;
+    if (userId === undefined) {
+      throw new Error('Invalid JWT payload');
+    }
+
+    (req as RequestWithLogger & { userId: string }).userId = userId;
+
+    // Overlay userId onto the per-request ALS store so audit writes from
+    // downstream handlers attribute the actor without explicit plumbing.
+    const store = requestContext.getStore();
+    if (store) {
+      requestContext.enterWith({ ...store, userId });
+    }
+
+    next();
+  } catch (err) {
+    const reason = err instanceof Error ? err.message.slice(0, TOKEN_REASON_MAX_LEN) : 'unknown';
+    log.warn(
+      {
+        err: reason, // Don't log full error (might contain token)
+        path: req.path,
+        ip: req.ip,
+      },
+      'Authentication failed - invalid token',
+    );
+    void writeOrLog(
+      prisma,
+      { action: AuditAction.AuthTokenInvalid, outcome: 'failure', outcomeReason: reason },
+      log,
+    );
+
+    const error = new InvalidTokenError();
+    res.status(error.statusCode).json({
+      ...error.toJSON(),
+      requestId,
+    });
+  }
+};

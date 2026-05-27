@@ -1,12 +1,12 @@
 import { jest } from '@jest/globals';
-import { errorHandler } from '../../../middleware/errorHandler.js';
+import { errorHandler } from '@/middleware/errorHandler.js';
 import {
   AppError,
   TodoNotFoundError,
   DuplicateEmailError,
   ServiceUnavailableError,
-} from '../../../errors/index.js';
-import type { PrismaError } from '../../../types/index.js';
+} from '@/errors/index.js';
+import type { PrismaError } from '@/types/index.js';
 
 describe('Error Handler Middleware', () => {
   /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -48,7 +48,7 @@ describe('Error Handler Middleware', () => {
             message: 'Todo not found',
           }),
           requestId: 'test-request-id',
-        })
+        }),
       );
       expect(req.log.error).toHaveBeenCalled();
     });
@@ -69,7 +69,7 @@ describe('Error Handler Middleware', () => {
             details: { extra: 'info' },
           }),
           requestId: 'test-request-id',
-        })
+        }),
       );
     });
 
@@ -111,10 +111,7 @@ describe('Error Handler Middleware', () => {
 
       errorHandler(error, req, res, next);
 
-      expect(res.setHeader).not.toHaveBeenCalledWith(
-        'Retry-After',
-        expect.anything(),
-      );
+      expect(res.setHeader).not.toHaveBeenCalledWith('Retry-After', expect.anything());
     });
 
     it('should handle AppError without details', () => {
@@ -153,7 +150,7 @@ describe('Error Handler Middleware', () => {
             message: expected.message,
           }),
           requestId: 'test-request-id',
-        })
+        }),
       );
     });
 
@@ -171,7 +168,7 @@ describe('Error Handler Middleware', () => {
             code: 'DUPLICATE_VALUE',
             message: 'Unknown_field already exists',
           }),
-        })
+        }),
       );
     });
 
@@ -188,7 +185,7 @@ describe('Error Handler Middleware', () => {
             code: 'DUPLICATE_VALUE',
             message: 'Field already exists',
           }),
-        })
+        }),
       );
     });
 
@@ -206,7 +203,7 @@ describe('Error Handler Middleware', () => {
             message: 'Record not found',
           }),
           requestId: 'test-request-id',
-        })
+        }),
       );
     });
   });
@@ -287,10 +284,7 @@ describe('Error Handler Middleware', () => {
             }),
           }),
         );
-        expect(res.setHeader).not.toHaveBeenCalledWith(
-          'Retry-After',
-          expect.anything(),
-        );
+        expect(res.setHeader).not.toHaveBeenCalledWith('Retry-After', expect.anything());
       },
     );
 
@@ -343,7 +337,7 @@ describe('Error Handler Middleware', () => {
             message: 'Invalid ID format',
           }),
           requestId: 'test-request-id',
-        })
+        }),
       );
     });
   });
@@ -364,7 +358,7 @@ describe('Error Handler Middleware', () => {
             message: 'Invalid JSON in request body',
           }),
           requestId: 'test-request-id',
-        })
+        }),
       );
     });
 
@@ -405,7 +399,7 @@ describe('Error Handler Middleware', () => {
             message: 'An unexpected error occurred',
           }),
           requestId: 'test-request-id',
-        })
+        }),
       );
     });
 
@@ -427,7 +421,7 @@ describe('Error Handler Middleware', () => {
           params: { id: 'abc' },
           query: { filter: 'active' },
         }),
-        'Test error'
+        'Test error',
       );
     });
 
@@ -437,10 +431,7 @@ describe('Error Handler Middleware', () => {
 
       errorHandler(error, req, res, next);
 
-      expect(req.log.error).toHaveBeenCalledWith(
-        expect.anything(),
-        'Unhandled error'
-      );
+      expect(req.log.error).toHaveBeenCalledWith(expect.anything(), 'Unhandled error');
     });
   });
 });

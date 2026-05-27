@@ -20,14 +20,15 @@ A production-ready RESTful API for managing todos with user authentication.
 
 **Architecture:**
 
-- `index.ts` - Server startup, database connection, graceful shutdown
-- `app.ts` - Express app factory, middleware pipeline, route mounting
-- `config/env.ts` - Environment variable validation with envalid
-- `types/` - TypeScript type definitions (index.ts, express.d.ts)
-- `errors/` - Custom error classes (AppError, AuthError, ValidationError, NotFoundError)
-- `models/` - Prisma models (User, Todo)
-- `routes/` - Express routers (auth, todos, health)
-- `middleware/` - Auth, validation, rate limiting, logging, error handling
+- `src/index.ts` - Server startup, database connection, graceful shutdown
+- `src/app.ts` - Express app factory, middleware pipeline, route mounting
+- `src/config/env.ts` - Environment variable validation with envalid
+- `src/types/` - TypeScript type definitions (index.ts, express.d.ts)
+- `src/errors/` - Custom error classes (AppError, AuthError, ValidationError, NotFoundError)
+- `src/lib/` - Prisma client, DB connection, audit logging, request context
+- `src/models/` - Prisma models (User, Todo)
+- `src/routes/` - Express routers (auth, todos, health)
+- `src/middleware/` - Auth, validation, rate limiting, logging, error handling
 
 ## Build and Test Commands
 
@@ -69,7 +70,7 @@ pnpm run start:prod    # Run in production mode
 
 - All source files use `.ts` extension
 - Strict mode enabled (`strict: true` in tsconfig.json)
-- Use types from `types/index.ts` for consistency
+- Use types from `src/types/index.ts` for consistency
 - Avoid `any` - use proper types or `unknown` with type guards
 - Use `Request`, `Response`, `NextFunction` from express for handlers
 
@@ -96,13 +97,13 @@ pnpm run start:prod    # Run in production mode
 
 ### Validation
 
-- Use Joi schemas defined in `middleware/validation.ts`
+- Use Joi schemas defined in `src/middleware/validation.ts`
 - Add new schemas to the `schemas` object
 - Apply with `validate(schemas.schemaName)` middleware
 
 ### Error Handling
 
-- Use custom error classes from `errors/index.ts` for consistent error responses
+- Use custom error classes from `src/errors/index.ts` for consistent error responses
 - Available error classes:
   - `AppError` - Base class for all custom errors
   - `AuthError`, `InvalidCredentialsError`, `NoTokenError`, `InvalidTokenError` - Authentication errors (401)
@@ -184,36 +185,37 @@ For the full testing guide (structure, helpers reference, writing tests, databas
 ### Critical Rules
 
 1. **Never log sensitive data**
-
    - Passwords, tokens, and authorization headers are automatically redacted
-   - Redaction configured in `middleware/logger.ts`
+   - Redaction configured in `src/middleware/logger.ts`
    - Do not bypass or disable redaction
 
 2. **User isolation**
-
    - All database queries MUST include `user: req.userId`
    - Never allow cross-user data access
    - Example: `Todo.find({ user: req.userId })` not `Todo.find({})`
 
 3. **Password handling**
-
-   - Passwords hashed with bcrypt (10 salt rounds) in User model pre-save hook
+   - Passwords hashed with bcrypt (12 salt rounds, OWASP 2024+ floor)
+   - Legacy cost-10 hashes are valid (bcrypt embeds cost in the hash); the login flow opportunistically re-hashes them at the current cost via `UserService.updatePassword`
    - Never store or return plain text passwords
    - Use `user.comparePassword()` method for verification
 
 4. **JWT tokens**
-
-   - 24-hour expiration
+   - 24-hour expiration, HS256 only
+   - Payload carries the standard `sub` claim (subject = user id), plus `iss` and `aud` (set via `JWT_ISSUER` / `JWT_AUDIENCE`)
+   - Verification has 5-second `clockTolerance` for cross-instance drift
+   - `JWT_VERIFY_REQUIRE_CLAIMS=false` during the rollout grace window — `src/middleware/auth.ts` still accepts legacy `{ userId }` payloads. Flip to `true` ≥24h after deploy; once stable, drop the back-compat branch
    - JWT_SECRET must be strong (32+ characters in production)
-   - Tokens validated in `middleware/auth.ts`
+   - Tokens validated in `src/middleware/auth.ts`
 
 5. **Rate limiting**
-   - Global: 200 requests per 15 minutes
-   - Register: 2 requests per hour
-   - Login: 3 failed attempts per 15 minutes
-   - Read operations: 100 per minute
-   - Write operations: 30 per minute
-   - Rate limiting is skipped in test environment only
+   - Global: 200 requests per 15 minutes (per IP)
+   - Register: 2 requests per hour (per IP)
+   - Login per (IP, email): 3 failed attempts per 15 minutes
+   - Login per email: 30 attempts per hour (caps single-account brute-force regardless of source IP)
+   - Read operations: 100 per minute (per IP)
+   - Write operations: 30 per minute (per IP)
+   - Rate limiting is skipped in the `test` environment and when `DISABLE_RATE_LIMIT=true`. In production (`NODE_ENV=production`) the latter requires the paired `DISABLE_RATE_LIMIT_PRODUCTION_CONFIRM=true` flag — startup aborts otherwise. Use only on a dedicated benchmark process.
 
 ### Input Validation
 
@@ -327,39 +329,39 @@ When an item from the roadmap is completed:
 
 Detailed reference docs live in `docs/`. The README is a landing page with summaries and links.
 
-| File                    | Content                                              |
-| ----------------------- | ---------------------------------------------------- |
-| `README.md`             | Quickstart, architecture, features, summary tables   |
-| `docs/api.md`           | Full API endpoint reference, error codes, status codes |
-| `docs/configuration.md` | All environment variables, CORS setup, `.env` examples |
-| `docs/docker.md`        | Docker build, run, production config, troubleshooting |
-| `docs/benchmarks.md`    | Benchmark methodology, k6 scripts, load levels, reproduction |
-| `docs/testing.md`               | Test framework, helpers, writing tests, CI config    |
-| `docs/runtime-correctness.md`   | Production runtime correctness plan (shutdown, pool, error handling) |
-| `docs/databases.md`             | Design memo for future audit-log (TimescaleDB) and search (pg_trgm → Elasticsearch) workstreams |
-| `ROADMAP.md`                    | Phased platform/production-readiness plan (SOC 2 priorities, open vs. done) |
+| File                          | Content                                                                                         |
+| ----------------------------- | ----------------------------------------------------------------------------------------------- |
+| `README.md`                   | Quickstart, architecture, features, summary tables                                              |
+| `docs/api.md`                 | Full API endpoint reference, error codes, status codes                                          |
+| `docs/configuration.md`       | All environment variables, CORS setup, `.env` examples                                          |
+| `docs/docker.md`              | Docker build, run, production config, troubleshooting                                           |
+| `docs/benchmarks.md`          | Benchmark methodology, k6 scripts, load levels, reproduction                                    |
+| `docs/testing.md`             | Test framework, helpers, writing tests, CI config                                               |
+| `docs/runtime-correctness.md` | Production runtime correctness plan (shutdown, pool, error handling)                            |
+| `docs/databases.md`           | Design memo for future audit-log (TimescaleDB) and search (pg_trgm → Elasticsearch) workstreams |
+| `ROADMAP.md`                  | Phased platform/production-readiness plan (SOC 2 priorities, open vs. done)                     |
 
 When changing API endpoints, update `docs/api.md`. When adding environment variables, update `docs/configuration.md`. When changing test infrastructure, update `docs/testing.md`. When changing benchmark infrastructure, update `docs/benchmarks.md`.
 
 ## Key Files Quick Reference
 
-| File                         | Purpose                                           |
-| ---------------------------- | ------------------------------------------------- |
-| `index.ts`                   | Server startup, DB connection, graceful shutdown  |
-| `app.ts`                     | Express app factory, middleware pipeline          |
-| `config/env.ts`              | Environment variable validation                   |
-| `types/index.ts`             | Core TypeScript type definitions                  |
-| `types/express.d.ts`         | Express Request/Response augmentation             |
-| `errors/index.ts`            | Custom error classes (AppError, AuthError, etc.)  |
-| `middleware/auth.ts`         | JWT authentication                                |
-| `middleware/errorHandler.ts` | Centralized error handling with structured format |
-| `middleware/validation.ts`   | Joi schemas and validation middleware             |
-| `middleware/rateLimiter.ts`  | Rate limiting configuration                       |
-| `middleware/logger.ts`       | Pino logger setup                                 |
-| `models/User.ts`             | User model with password hashing                  |
-| `models/Todo.ts`             | Todo model                                        |
-| `routes/auth.ts`             | Register and login endpoints                      |
-| `routes/health.ts`           | Health check endpoints (liveness/readiness)       |
-| `routes/todos.ts`            | CRUD operations for todos                         |
-| `tsconfig.json`              | TypeScript compiler configuration                 |
-| `tsconfig.test.json`         | TypeScript config for tests                       |
+| File                             | Purpose                                           |
+| -------------------------------- | ------------------------------------------------- |
+| `src/index.ts`                   | Server startup, DB connection, graceful shutdown  |
+| `src/app.ts`                     | Express app factory, middleware pipeline          |
+| `src/config/env.ts`              | Environment variable validation                   |
+| `src/types/index.ts`             | Core TypeScript type definitions                  |
+| `src/types/express.d.ts`         | Express Request/Response augmentation             |
+| `src/errors/index.ts`            | Custom error classes (AppError, AuthError, etc.)  |
+| `src/middleware/auth.ts`         | JWT authentication                                |
+| `src/middleware/errorHandler.ts` | Centralized error handling with structured format |
+| `src/middleware/validation.ts`   | Joi schemas and validation middleware             |
+| `src/middleware/rateLimiter.ts`  | Rate limiting configuration                       |
+| `src/middleware/logger.ts`       | Pino logger setup                                 |
+| `src/models/User.ts`             | User model with password hashing                  |
+| `src/models/Todo.ts`             | Todo model                                        |
+| `src/routes/auth.ts`             | Register and login endpoints                      |
+| `src/routes/health.ts`           | Health check endpoints (liveness/readiness)       |
+| `src/routes/todos.ts`            | CRUD operations for todos                         |
+| `tsconfig.json`                  | TypeScript compiler configuration                 |
+| `tsconfig.test.json`             | TypeScript config for tests                       |

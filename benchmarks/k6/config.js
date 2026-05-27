@@ -1,7 +1,6 @@
 /* global __ENV */
 export const BASE_URL = __ENV.BASE_URL || 'http://localhost:3001';
-export const BENCH_USER_EMAIL =
-  __ENV.BENCH_USER_EMAIL || 'benchuser0@example.com';
+export const BENCH_USER_EMAIL = __ENV.BENCH_USER_EMAIL || 'benchuser0@example.com';
 export const BENCH_USER_PASSWORD = __ENV.BENCH_USER_PASSWORD || 'BenchPass1!';
 
 export const WARMUP_DURATION = '30s';
@@ -18,7 +17,8 @@ export const LOAD_LEVELS = {
     },
   },
   medium: {
-    vus: 50,
+    vus: 100,
+    maxVUs: 300,
     duration: '60s',
     rps: 300,
     thresholds: {
@@ -27,23 +27,20 @@ export const LOAD_LEVELS = {
     },
   },
   high: {
-    vus: 200,
+    vus: 500,
+    maxVUs: 1200,
     duration: '60s',
     rps: 1000,
     thresholds: {
-      'http_req_duration{phase:load}': [
-        'p(50)<200',
-        'p(95)<1000',
-        'p(99)<2000',
-      ],
+      'http_req_duration{phase:load}': ['p(50)<200', 'p(95)<1000', 'p(99)<2000'],
       'http_req_failed{phase:load}': ['rate<0.05'],
     },
   },
   overload: {
-    vus: 500,
+    vus: 1500,
+    maxVUs: 4000,
     duration: '60s',
     rps: 3000,
-    maxVUs: 1500,
     thresholds: {},
   },
 };

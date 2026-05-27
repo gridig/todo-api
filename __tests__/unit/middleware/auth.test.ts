@@ -1,6 +1,6 @@
 import jwt from 'jsonwebtoken';
 import { jest } from '@jest/globals';
-import { auth } from '../../../middleware/auth.js';
+import { auth } from '@/middleware/auth.js';
 
 describe('Auth Middleware', () => {
   /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -13,7 +13,8 @@ describe('Auth Middleware', () => {
     req = {
       header: jest.fn(),
       id: 'test-request-id',
-      log: { warn: jest.fn() },
+      log: { warn: jest.fn(), error: jest.fn(), info: jest.fn() },
+      ip: '127.0.0.1',
     };
     res = {
       status: jest.fn().mockReturnThis(),
@@ -45,7 +46,7 @@ describe('Auth Middleware', () => {
           message: 'No authentication token provided',
         }),
         requestId: 'test-request-id',
-      })
+      }),
     );
   });
 
@@ -62,7 +63,7 @@ describe('Auth Middleware', () => {
           message: 'Invalid or expired token',
         }),
         requestId: 'test-request-id',
-      })
+      }),
     );
   });
 
@@ -86,7 +87,7 @@ describe('Auth Middleware', () => {
           code: 'NO_TOKEN',
           message: 'No authentication token provided',
         }),
-      })
+      }),
     );
   });
 
@@ -102,7 +103,7 @@ describe('Auth Middleware', () => {
           code: 'INVALID_TOKEN',
           message: 'Invalid or expired token',
         }),
-      })
+      }),
     );
   });
 
@@ -110,7 +111,7 @@ describe('Auth Middleware', () => {
     const expiredToken = jwt.sign(
       { userId: '123' },
       process.env.JWT_SECRET as string,
-      { expiresIn: '-1s' } // Already expired
+      { expiresIn: '-1h' }, // Far past the 5s clockTolerance
     );
     req.header.mockReturnValue(`Bearer ${expiredToken}`);
 
@@ -123,7 +124,7 @@ describe('Auth Middleware', () => {
           code: 'INVALID_TOKEN',
           message: 'Invalid or expired token',
         }),
-      })
+      }),
     );
     expect(next).not.toHaveBeenCalled();
   });
@@ -140,7 +141,7 @@ describe('Auth Middleware', () => {
         error: expect.objectContaining({
           code: 'INVALID_TOKEN',
         }),
-      })
+      }),
     );
     expect(next).not.toHaveBeenCalled();
   });
@@ -157,10 +158,8 @@ describe('Auth Middleware', () => {
 
   it('should reject token with alg=none (algorithm confusion)', () => {
     // jsonwebtoken refuses to sign with alg=none unless explicitly allowed; craft manually.
-    const header = Buffer.from(JSON.stringify({ alg: 'none', typ: 'JWT' }))
-      .toString('base64url');
-    const payload = Buffer.from(JSON.stringify({ userId: '123' }))
-      .toString('base64url');
+    const header = Buffer.from(JSON.stringify({ alg: 'none', typ: 'JWT' })).toString('base64url');
+    const payload = Buffer.from(JSON.stringify({ userId: '123' })).toString('base64url');
     const unsignedToken = `${header}.${payload}.`;
     req.header.mockReturnValue(`Bearer ${unsignedToken}`);
 
@@ -176,11 +175,9 @@ describe('Auth Middleware', () => {
   });
 
   it('should reject token signed with HS512 when only HS256 is allowed', () => {
-    const token = jwt.sign(
-      { userId: '123' },
-      process.env.JWT_SECRET as string,
-      { algorithm: 'HS512' },
-    );
+    const token = jwt.sign({ userId: '123' }, process.env.JWT_SECRET as string, {
+      algorithm: 'HS512',
+    });
     req.header.mockReturnValue(`Bearer ${token}`);
 
     auth(req, res, next);
@@ -194,8 +191,18 @@ describe('Auth Middleware', () => {
     expect(next).not.toHaveBeenCalled();
   });
 
-  it('should reject token whose payload is missing userId', () => {
+  it('should accept token with sub claim (RFC-7519 subject)', () => {
     const token = jwt.sign({ sub: '123' }, process.env.JWT_SECRET as string);
+    req.header.mockReturnValue(`Bearer ${token}`);
+
+    auth(req, res, next);
+
+    expect(req.userId).toBe('123');
+    expect(next).toHaveBeenCalled();
+  });
+
+  it('should reject token whose payload has neither sub nor userId', () => {
+    const token = jwt.sign({ some: 'other-claim' }, process.env.JWT_SECRET as string);
     req.header.mockReturnValue(`Bearer ${token}`);
 
     auth(req, res, next);
@@ -210,10 +217,7 @@ describe('Auth Middleware', () => {
   });
 
   it('should reject token whose userId is not a string', () => {
-    const token = jwt.sign(
-      { userId: 123 },
-      process.env.JWT_SECRET as string,
-    );
+    const token = jwt.sign({ userId: 123 }, process.env.JWT_SECRET as string);
     req.header.mockReturnValue(`Bearer ${token}`);
 
     auth(req, res, next);

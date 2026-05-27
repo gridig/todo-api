@@ -78,7 +78,7 @@ Minimum **80%** across all four metrics, enforced via Jest thresholds:
 | Lines      | 80%       |
 | Statements | 80%       |
 
-Coverage is collected from `models/`, `middleware/`, and `routes/`. `middleware/logger.ts` is excluded (Pino internals are not unit-testable).
+Coverage is collected from `src/models/`, `src/middleware/`, and `src/routes/`. `src/middleware/logger.ts` is excluded (Pino internals are not unit-testable).
 
 Run `pnpm run test:coverage` to generate a report.
 
@@ -110,14 +110,7 @@ Run `pnpm run test:coverage` to generate a report.
 Integration tests hit HTTP endpoints via Supertest. Standard lifecycle:
 
 ```typescript
-import {
-  describe,
-  it,
-  expect,
-  beforeAll,
-  afterEach,
-  afterAll,
-} from '@jest/globals';
+import { describe, it, expect, beforeAll, afterEach, afterAll } from '@jest/globals';
 import request from 'supertest';
 import {
   createTestApp,
@@ -164,19 +157,8 @@ describe('POST /todos', () => {
 Unit tests isolate individual components using Jest mocks:
 
 ```typescript
-import {
-  describe,
-  it,
-  expect,
-  beforeAll,
-  afterEach,
-  afterAll,
-} from '@jest/globals';
-import {
-  connectTestDB,
-  disconnectTestDB,
-  cleanupTestData,
-} from '../helpers/testSetup.js';
+import { describe, it, expect, beforeAll, afterEach, afterAll } from '@jest/globals';
+import { connectTestDB, disconnectTestDB, cleanupTestData } from '../helpers/testSetup.js';
 import UserService from '../../models/User.js';
 
 beforeAll(async () => {
