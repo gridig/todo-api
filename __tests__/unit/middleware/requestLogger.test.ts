@@ -1,6 +1,6 @@
 import { jest } from '@jest/globals';
 import { EventEmitter } from 'events';
-import { requestLoggerMiddleware } from '../../../middleware/requestLogger.js';
+import { requestLoggerMiddleware } from '@/middleware/requestLogger.js';
 
 describe('Request Logger Middleware', () => {
   /* eslint-disable @typescript-eslint/no-explicit-any */

@@ -296,7 +296,7 @@ Production deploys to Railway via [`.github/workflows/deploy.yml`](../.github/wo
 | **TimescaleDB extension** | Not available               | First-class                                                                      |
 | **Backups**               | Managed by Railway (opaque) | Operated via pgBackRest (PITR, verified, in-vendor)                              |
 | **Failover**              | Managed                     | Manual unless replica is added — acceptable for current scale                    |
-| **Connection pooling**    | Pgbouncer optional          | Application pool (`lib/prisma.ts`) — no change                                   |
+| **Connection pooling**    | Pgbouncer optional          | Application pool (`src/lib/prisma.ts`) — no change                                   |
 | **Upgrade cadence**       | Auto                        | Manual image bump — kept aligned with the `timescale/timescaledb:latest-pgN` tag |
 | **Cost**                  | Per-GB managed pricing      | Container + volume + Bucket egress (egress within Railway is free)               |
 
@@ -351,7 +351,7 @@ pg1-path=/var/lib/postgresql/data
 
 ### Prisma Integration
 
-Prisma manages the table schema. Hypertable creation, retention policies, role grants, and TimescaleDB-specific features use raw SQL inside Prisma migrations (consistent with existing `$queryRaw` usage in [`models/Todo.ts`](../models/Todo.ts)). Migrations run as the `todo_admin` role (see **Database Role Model** below); the application runtime connects as `todo_app`.
+Prisma manages the table schema. Hypertable creation, retention policies, role grants, and TimescaleDB-specific features use raw SQL inside Prisma migrations (consistent with existing `$queryRaw` usage in [`src/models/Todo.ts`](../src/models/Todo.ts)). Migrations run as the `todo_admin` role (see **Database Role Model** below); the application runtime connects as `todo_app`.
 
 ### Hypertable Design
 
@@ -426,7 +426,7 @@ REVOKE-based immutability only works if the application connects as a non-superu
 | Role                | Used by                                                   | Privileges                                                                                     |
 | ------------------- | --------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
 | `todo_admin`        | Prisma migrations (CI deploy step, manual ops)            | Schema OWNER, DDL, all DML                                                                     |
-| `todo_app`          | Application runtime ([`lib/prisma.ts`](../lib/prisma.ts)) | `SELECT, INSERT, UPDATE, DELETE` on `users`, `todos`; `SELECT, INSERT` only on `audit_entries` |
+| `todo_app`          | Application runtime ([`src/lib/prisma.ts`](../src/lib/prisma.ts)) | `SELECT, INSERT, UPDATE, DELETE` on `users`, `todos`; `SELECT, INSERT` only on `audit_entries` |
 | `todo_audit_reader` | Security/compliance dashboards, ad-hoc auditor queries    | `SELECT` on `audit_entries` only                                                               |
 
 ```sql
@@ -446,7 +446,7 @@ GRANT SELECT ON audit_entries TO todo_audit_reader;
 
 Two environment variables wire this up:
 
-- `DATABASE_URL` — the application connection (`todo_app`); read by [`config/env.ts`](../config/env.ts)
+- `DATABASE_URL` — the application connection (`todo_app`); read by [`src/config/env.ts`](../src/config/env.ts)
 - `DATABASE_MIGRATE_URL` — the migrations connection (`todo_admin`); used only by `pnpm run migrate:deploy`
 
 **Tests.** [`__tests__/helpers/testSetup.ts`](../__tests__/helpers/testSetup.ts) needs a privileged second pool wired to `DATABASE_MIGRATE_URL` so `cleanupTestData()` can `TRUNCATE audit_entries RESTART IDENTITY CASCADE` — the test role inherits the REVOKE and cannot delete from the table directly. This is by design: it forces the test suite to use the same immutability surface as production.
@@ -466,7 +466,7 @@ export const requestContext = new AsyncLocalStorage<{
 }>();
 ```
 
-A middleware mounted in [`app.ts`](../app.ts) right after [`middleware/requestId.ts`](../middleware/requestId.ts) wraps the rest of the request in `requestContext.run({ requestId, ip, userAgent }, next)`; [`middleware/auth.ts`](../middleware/auth.ts) re-enters the store with `userId` once the JWT is verified.
+A middleware mounted in [`src/app.ts`](../src/app.ts) right after [`src/middleware/requestId.ts`](../src/middleware/requestId.ts) wraps the rest of the request in `requestContext.run({ requestId, ip, userAgent }, next)`; [`src/middleware/auth.ts`](../src/middleware/auth.ts) re-enters the store with `userId` once the JWT is verified.
 
 ```typescript
 // lib/auditLog.ts — single write() method, no update/delete/batch
@@ -527,7 +527,7 @@ async toggleDone({ id, userId }) {
 - **ALS doubles for OpenTelemetry.** The Monitoring & Observability roadmap item adds OTel spans which use the same context mechanism — one pattern serves both workstreams.
 - **No magic.** Explicit `auditLog.write()` calls beat a Prisma `$extends` that audits every query: extensions can't easily distinguish audited vs unaudited mutations (migrations, cleanup jobs, test seed data) and obscure what auditors must trace by hand.
 
-The stable action vocabulary lives in `lib/auditActions.ts` as exported constants (`AuthLogin`, `AuthRegister`, `TodoCreate`, `AccessDenied`, ...) — typos surface at compile time and the vocabulary is documented in one place.
+The stable action vocabulary lives in `src/lib/auditActions.ts` as exported constants (`AuthLogin`, `AuthRegister`, `TodoCreate`, `AccessDenied`, ...) — typos surface at compile time and the vocabulary is documented in one place.
 
 ### Failure Modes & Monitoring
 
@@ -556,13 +556,13 @@ The hypertable design is sized for ~1K–10K events/day with headroom; the follo
 | > 100 chunks scanned per typical auditor query                                  | Add a covering index on the specific `(actor, action, time)` slice the dashboard hits; consider materialized views for the hottest reports.                                                                                                                     |
 | Pool saturation visible in `pg_pool_waiting_clients` correlated with audit load | Split the audit writes onto a dedicated connection pool (separate Prisma client) inside the app process — single instance, two pools — before moving to a separate DB.                                                                                          |
 
-The **outbox migration path** is documented but deliberately deferred: at current scale, same-transaction writes are simpler, more durable, and cheap. Once volume forces decoupling, the existing `lib/auditLog.ts` interface becomes the outbox enqueue, the underlying table writes to a `search_outbox`-style staging table, and a worker drains it into the dedicated audit DB. The application code calling `auditLog.write()` does not change.
+The **outbox migration path** is documented but deliberately deferred: at current scale, same-transaction writes are simpler, more durable, and cheap. Once volume forces decoupling, the existing `src/lib/auditLog.ts` interface becomes the outbox enqueue, the underlying table writes to a `search_outbox`-style staging table, and a worker drains it into the dedicated audit DB. The application code calling `auditLog.write()` does not change.
 
 ### SOC 2 Impact
 
 TimescaleDB + the role model + REVOKE provide layered immutability:
 
-- **Application layer.** [`lib/auditLog.ts`](../lib/auditLog.ts) exposes only `write()`; no `update`, `delete`, or batch methods exist for any caller to misuse.
+- **Application layer.** [`src/lib/auditLog.ts`](../src/lib/auditLog.ts) exposes only `write()`; no `update`, `delete`, or batch methods exist for any caller to misuse.
 - **Database layer.** `todo_app` has `SELECT, INSERT` only; `REVOKE UPDATE, DELETE, TRUNCATE` ensures that even a compromised application process or SQL-injection payload cannot tamper with the audit trail.
 - **Storage layer.** Once a chunk is older than the compression policy threshold (see **Scale Planning**), the chunk's underlying files become read-only and writes raise an error.
 - **Retention.** `add_retention_policy('audit_entries', INTERVAL '1 year')` drops chunks via `drop_chunks` — operating on time boundaries, not row-level DELETEs, so it bypasses the REVOKE while remaining auditable: the dropped time range is the retention boundary, deterministic and inspectable in `timescaledb_information.jobs`.
@@ -622,19 +622,19 @@ Search flow: queries hit ES first. If ES is unavailable, falls back to `pg_trgm`
 
 - `prisma/sql/bootstrap_roles.sql` — three-role creation (run once per env as superuser)
 - `prisma/migrations/xxx_add_audit_entries/migration.sql` — hypertable + indexes + retention + grants/REVOKE
-- `lib/requestContext.ts` — AsyncLocalStorage holding `{ requestId, userId, ip, userAgent }`
-- `middleware/requestContext.ts` — populates the ALS store; mounted after `requestId`
-- `lib/auditActions.ts` — stable action vocabulary as exported constants
-- `lib/auditLog.ts` — single `write()` method, no update/delete
+- `src/lib/requestContext.ts` — AsyncLocalStorage holding `{ requestId, userId, ip, userAgent }`
+- `src/middleware/requestContext.ts` — populates the ALS store; mounted after `requestId`
+- `src/lib/auditActions.ts` — stable action vocabulary as exported constants
+- `src/lib/auditLog.ts` — single `write()` method, no update/delete
 
 **Search:**
 
 - `prisma/migrations/xxx_add_search.sql` — `pg_trgm` extension + GIN index
 - `prisma/migrations/xxx_add_search_outbox.sql` — outbox table for ES sync
-- `lib/elasticsearch.ts` — ES client singleton and index management
+- `src/lib/elasticsearch.ts` — ES client singleton and index management
 - `services/searchSync.ts` — outbox worker that syncs Postgres → ES
 - `services/search.ts` — search service with ES primary and `pg_trgm` fallback
-- `routes/search.ts` — unified search endpoint with facets, highlighting, autocomplete
+- `src/routes/search.ts` — unified search endpoint with facets, highlighting, autocomplete
 
 ### Audit Emission (Service Layer + ALS)
 

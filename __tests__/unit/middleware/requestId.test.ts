@@ -1,5 +1,5 @@
 import { jest } from '@jest/globals';
-import { requestIdMiddleware } from '../../../middleware/requestId.js';
+import { requestIdMiddleware } from '@/middleware/requestId.js';
 
 describe('RequestId Middleware', () => {
   let req: any;

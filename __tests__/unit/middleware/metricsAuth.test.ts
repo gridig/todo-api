@@ -3,11 +3,11 @@ import type { Request, Response, NextFunction } from 'express';
 
 const TOKEN = 'test-metrics-token';
 
-jest.unstable_mockModule('../../../config/env.js', () => ({
+jest.unstable_mockModule('@/config/env.js', () => ({
   env: { METRICS_TOKEN: TOKEN },
 }));
 
-const { metricsAuthMiddleware } = await import('../../../middleware/metrics.js');
+const { metricsAuthMiddleware } = await import('@/middleware/metrics.js');
 
 describe('metricsAuthMiddleware', () => {
   /* eslint-disable @typescript-eslint/no-explicit-any */

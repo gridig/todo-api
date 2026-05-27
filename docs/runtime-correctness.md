@@ -28,7 +28,7 @@ Three areas where the current implementation diverges from correct production be
 
 ### Changes
 
-**`config/env.ts`**
+**`src/config/env.ts`**
 
 Add `num` to the envalid import. Add two new variables:
 
@@ -37,7 +37,7 @@ Add `num` to the envalid import. Add two new variables:
 | `SHUTDOWN_DELAY_MS`   | num  | `5000`  | Sleep before closing; covers K8s endpoint propagation lag |
 | `SHUTDOWN_TIMEOUT_MS` | num  | `10000` | Force-exit if graceful drain exceeds this duration        |
 
-**`index.ts`**
+**`src/index.ts`**
 
 Add process-level error handlers at module scope (after imports, before `startServer`):
 
@@ -81,7 +81,7 @@ SIGTERM received
 
 ### Root Causes
 
-**Dead pool (wasted connections).** `lib/prisma.ts` constructs `new Pool({ connectionString })` on line 8 and `new PrismaPg({ connectionString })` on line 9. `PrismaPg` is passed the connection string directly, so it creates its own internal connection management independent of the explicit `Pool`. The `Pool` on line 8 opens up to 10 connections to Postgres while doing nothing with them. The ROADMAP (#12) describes removing it — the correct fix is to pass it to the adapter instead, making it the live pool whose settings take effect.
+**Dead pool (wasted connections).** `src/lib/prisma.ts` constructs `new Pool({ connectionString })` on line 8 and `new PrismaPg({ connectionString })` on line 9. `PrismaPg` is passed the connection string directly, so it creates its own internal connection management independent of the explicit `Pool`. The `Pool` on line 8 opens up to 10 connections to Postgres while doing nothing with them. The ROADMAP (#12) describes removing it — the correct fix is to pass it to the adapter instead, making it the live pool whose settings take effect.
 
 **No pool configuration.** Neither pool has `max`, `min`, `connectionTimeoutMillis`, or `idleTimeoutMillis` set. All defaults apply. Under horizontal scaling, each replica's untuned pool pushes Postgres toward `max_connections` limits at traffic spikes — the specific failure mode described in the referenced production patterns discussion.
 
@@ -89,7 +89,7 @@ SIGTERM received
 
 ### Changes
 
-**`config/env.ts`**
+**`src/config/env.ts`**
 
 Add five new variables:
 
@@ -103,22 +103,22 @@ Add five new variables:
 
 Document these in `docs/configuration.md` alongside pool sizing guidance: `DB_POOL_MAX × replica_count` must stay well below Postgres `max_connections` (default 100), with headroom for migrations and admin connections.
 
-**`lib/prisma.ts`**
+**`src/lib/prisma.ts`**
 
-- Import `env` from `config/env.ts`.
+- Import `env` from `src/config/env.ts`.
 - Configure the `Pool` constructor with the four new pool env vars.
 - Pass the configured `pool` to `new PrismaPg({ pool })` instead of `new PrismaPg({ connectionString })`. This makes the single, explicitly constructed and configured pool the one Prisma actually uses.
 - The `export { pool }` stays — it now refers to the live, tuned pool (and the test teardown path that calls `pool.end()` remains correct).
 
-**`middleware/rateLimiter.ts`**
+**`src/middleware/rateLimiter.ts`**
 
 - Install `redis` and `rate-limit-redis` packages.
 - At module load, if `env.REDIS_URL` is set, create and connect a Redis client. Log connection errors without crashing — rate limiting degrades to in-memory, which is acceptable for single-instance deployments.
 - Add a `makeStore(prefix: string)` factory: returns a `RedisStore` when the Redis client is connected, `undefined` otherwise (`rateLimit` treats `undefined` as the default in-memory store).
 - Pass `store: makeStore('<limiter-name>')` to each of the five `rateLimit()` calls.
-- Export the Redis client so `index.ts` can disconnect it during shutdown.
+- Export the Redis client so `src/index.ts` can disconnect it during shutdown.
 
-**`index.ts`** (shutdown addition)
+**`src/index.ts`** (shutdown addition)
 
 Add Redis client disconnection to `setupGracefulShutdown()` after `server.close()` resolves and before `prisma.$disconnect()`.
 
@@ -128,22 +128,22 @@ Add Redis client disconnection to `setupGracefulShutdown()` after `server.close(
 
 ### Root Causes
 
-**P2002 handled at two levels with inconsistent responses.** `routes/auth.ts` catches P2002 in the `/register` handler and returns a `DuplicateEmailError` (code: `DUPLICATE_EMAIL`). `middleware/errorHandler.ts` also handles P2002, returning an inline object with code `DUPLICATE_VALUE` and a different message format. Since the route catches the error and responds directly — never calling `next(err)` — the central handler's P2002 branch is dead code for the email case. Any future route that surfaces P2002 without a local catch receives a different error code and shape from the same underlying violation.
+**P2002 handled at two levels with inconsistent responses.** `src/routes/auth.ts` catches P2002 in the `/register` handler and returns a `DuplicateEmailError` (code: `DUPLICATE_EMAIL`). `src/middleware/errorHandler.ts` also handles P2002, returning an inline object with code `DUPLICATE_VALUE` and a different message format. Since the route catches the error and responds directly — never calling `next(err)` — the central handler's P2002 branch is dead code for the email case. Any future route that surfaces P2002 without a local catch receives a different error code and shape from the same underlying violation.
 
-**Validation errors bypass errorHandler entirely.** `middleware/validation.ts` returns `res.status(400).json({ error: errors })` where `errors` is an array: `[{ field, message }]`. All `AppError` subclasses return `{ error: { code, message, details } }` — an object under the `error` key. These are structurally incompatible. Because the response is sent directly via `res.json()` the `errorHandler` is bypassed entirely, so validation error responses carry no `requestId`.
+**Validation errors bypass errorHandler entirely.** `src/middleware/validation.ts` returns `res.status(400).json({ error: errors })` where `errors` is an array: `[{ field, message }]`. All `AppError` subclasses return `{ error: { code, message, details } }` — an object under the `error` key. These are structurally incompatible. Because the response is sent directly via `res.json()` the `errorHandler` is bypassed entirely, so validation error responses carry no `requestId`.
 
-**No process-level error handlers.** The third layer in the layered error strategy — a global handler for unhandled rejections — is absent. Covered in Section 1; changes live in `index.ts`.
+**No process-level error handlers.** The third layer in the layered error strategy — a global handler for unhandled rejections — is absent. Covered in Section 1; changes live in `src/index.ts`.
 
 ### Changes
 
-**`routes/auth.ts`**
+**`src/routes/auth.ts`**
 
 Remove both try/catch blocks from `/register` and `/login`. Express 5 automatically catches rejected async handler promises and forwards them to `next(err)` — the try/catch blocks are opt-in error containment, not required boilerplate. Removing them routes all errors to the central handler. The `/register` P2002 inline handling is deleted. The `/login` handler's early 401 returns for wrong credentials and missing users are not exceptions and are unaffected.
 
-**`middleware/validation.ts`**
+**`src/middleware/validation.ts`**
 
 - Rename the local `interface ValidationError` to `interface FieldError` to avoid shadowing the imported class.
-- Import `ValidationError as AppValidationError` from `errors/index.ts`.
+- Import `ValidationError as AppValidationError` from `src/errors/index.ts`.
 - Replace `res.status(400).json({ error: errors })` with `return next(new AppValidationError('Validation failed', { fields }))` where `fields` is the mapped array placed in `details.fields`.
 - Mark `_res` as unused in the middleware signature.
 
@@ -162,7 +162,7 @@ All validation errors now flow through `errorHandler`, receive a `requestId`, an
 }
 ```
 
-**`middleware/errorHandler.ts`**
+**`src/middleware/errorHandler.ts`**
 
 Update the P2002 handler to construct a `ValidationError` instance (with a dynamic message and `details` derived from `err.meta.target`) and call `.toJSON()` rather than assembling a raw inline JSON object. This makes the P2002 response structurally consistent with all other error responses and eliminates the duplicate handling path.
 

@@ -11,7 +11,7 @@ import {
   readLimiter,
   writeLimiter,
   healthLimiter,
-} from '../../../middleware/rateLimiter.js';
+} from '@/middleware/rateLimiter.js';
 
 describe('Rate Limiter Middleware', () => {
   /* eslint-disable @typescript-eslint/no-explicit-any */

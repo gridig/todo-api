@@ -11,7 +11,7 @@ The application uses `envalid` to validate all environment variables at startup,
 - Clear error messages with examples for misconfigured values
 - Prevents runtime failures due to configuration issues
 
-**Implementation**: See `config/env.ts` for the validation schema and `.env.example` for a template.
+**Implementation**: See `src/config/env.ts` for the validation schema and `.env.example` for a template.
 
 ## Required Variables
 
@@ -226,7 +226,7 @@ CORS_CREDENTIALS=true
 
 ## Health Check Thresholds
 
-The `/health/ready` endpoint returns HTTP 503 only when a **binding constraint** trips: the database is unreachable, or the connection pool is saturated. Memory and CPU are reported as observational sub-checks — they can flip a sub-check to `warning` but never to `error`, and never affect the overall readiness verdict. Thresholds are hardcoded in `routes/health.ts` (kept as constants rather than env vars to discourage per-deploy variance in what "healthy" means).
+The `/health/ready` endpoint returns HTTP 503 only when a **binding constraint** trips: the database is unreachable, or the connection pool is saturated. Memory and CPU are reported as observational sub-checks — they can flip a sub-check to `warning` but never to `error`, and never affect the overall readiness verdict. Thresholds are hardcoded in `src/routes/health.ts` (kept as constants rather than env vars to discourage per-deploy variance in what "healthy" means).
 
 | Check    | Threshold                                                      | Sub-check status on breach | Affects readiness? | Source                                    |
 | -------- | -------------------------------------------------------------- | -------------------------- | ------------------ | ----------------------------------------- |
@@ -242,7 +242,7 @@ The DB reachability check runs against a **dedicated single-connection probe poo
 
 ## Security Headers & Proxy Trust
 
-The application wires the following defenses in `app.ts`:
+The application wires the following defenses in `src/app.ts`:
 
 - **Helmet** (`helmet()` with defaults) sets the full hardening header set: `Strict-Transport-Security` (HSTS, `max-age=15552000; includeSubDomains`), `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`, `Cross-Origin-Opener-Policy`, `Cross-Origin-Resource-Policy`, and a strict `Content-Security-Policy`. HSTS only takes effect over HTTPS, so it is a no-op in local development and relies on the load balancer terminating TLS in front of the API in production.
 - **`trust proxy = 1`** trusts one upstream proxy hop (ALB / ingress). Required for `req.ip` to reflect the real client IP rather than the proxy, so per-client rate limiting and audit log `sourceIp` are correct.

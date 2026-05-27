@@ -2,12 +2,12 @@ import request from 'supertest';
 import jwt from 'jsonwebtoken';
 import { createHash } from 'node:crypto';
 import { jest } from '@jest/globals';
-import UserService from '../../models/User.js';
-import TodoService from '../../models/Todo.js';
-import auditLog from '../../lib/auditLog.js';
-import { AuditAction } from '../../lib/auditActions.js';
-import prisma from '../../lib/prisma.js';
-import { env } from '../../config/env.js';
+import UserService from '@/models/User.js';
+import TodoService from '@/models/Todo.js';
+import auditLog from '@/lib/auditLog.js';
+import { AuditAction } from '@/lib/auditActions.js';
+import prisma from '@/lib/prisma.js';
+import { env } from '@/config/env.js';
 import {
   createTestApp,
   createTestUser,

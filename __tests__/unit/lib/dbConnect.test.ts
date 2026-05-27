@@ -1,5 +1,5 @@
 import { jest } from '@jest/globals';
-import { connectWithRetry, computeNextDelay } from '../../../lib/dbConnect.js';
+import { connectWithRetry, computeNextDelay } from '@/lib/dbConnect.js';
 import type { Logger } from 'pino';
 
 const makeLogger = (): Logger => {

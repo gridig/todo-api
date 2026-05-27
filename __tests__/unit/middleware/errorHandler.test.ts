@@ -1,12 +1,12 @@
 import { jest } from '@jest/globals';
-import { errorHandler } from '../../../middleware/errorHandler.js';
+import { errorHandler } from '@/middleware/errorHandler.js';
 import {
   AppError,
   TodoNotFoundError,
   DuplicateEmailError,
   ServiceUnavailableError,
-} from '../../../errors/index.js';
-import type { PrismaError } from '../../../types/index.js';
+} from '@/errors/index.js';
+import type { PrismaError } from '@/types/index.js';
 
 describe('Error Handler Middleware', () => {
   /* eslint-disable @typescript-eslint/no-explicit-any */

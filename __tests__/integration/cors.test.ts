@@ -1,8 +1,8 @@
 import request from 'supertest';
 import type { Application } from 'express';
-import { createApp } from '../../app.js';
+import { createApp } from '@/app.js';
 import { createTestUser, disconnectTestDB } from '../helpers/testSetup.js';
-import UserService from '../../models/User.js';
+import UserService from '@/models/User.js';
 
 describe('CORS Integration', () => {
   let app: Application;

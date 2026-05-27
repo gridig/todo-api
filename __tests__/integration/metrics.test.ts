@@ -1,7 +1,7 @@
 import request from 'supertest';
 import { createTestApp, connectTestDB, disconnectTestDB } from '../helpers/testSetup.js';
-import { register } from '../../middleware/metrics.js';
-import { env } from '../../config/env.js';
+import { register } from '@/middleware/metrics.js';
+import { env } from '@/config/env.js';
 
 const app = createTestApp();
 const bearer = `Bearer ${env.METRICS_TOKEN}`;

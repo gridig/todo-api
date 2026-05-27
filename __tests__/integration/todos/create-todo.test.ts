@@ -5,8 +5,8 @@ import {
   connectTestDB,
   disconnectTestDB,
 } from '../../helpers/testSetup.js';
-import TodoService from '../../../models/Todo.js';
-import UserService from '../../../models/User.js';
+import TodoService from '@/models/Todo.js';
+import UserService from '@/models/User.js';
 import type { Application } from 'express';
 
 const app: Application = createTestApp();

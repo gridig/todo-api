@@ -6,9 +6,9 @@ import {
   logPoolHealth,
   POOL_UTILIZATION_WARN_THRESHOLD,
   pool,
-} from '../../lib/prisma.js';
-import logger from '../../middleware/logger.js';
-import { env } from '../../config/env.js';
+} from '@/lib/prisma.js';
+import logger from '@/middleware/logger.js';
+import { env } from '@/config/env.js';
 
 const app = createTestApp();
 const bearer = `Bearer ${env.METRICS_TOKEN}`;

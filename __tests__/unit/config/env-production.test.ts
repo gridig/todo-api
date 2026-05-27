@@ -1,4 +1,4 @@
-import { assertProductionEnv } from '../../../config/env.js';
+import { assertProductionEnv } from '@/config/env.js';
 
 const STRONG_TOKEN = 'a'.repeat(40);
 

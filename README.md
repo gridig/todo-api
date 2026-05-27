@@ -328,38 +328,41 @@ todo-api/
 │   │   └── todoHelpers.ts     # Todo-specific helpers
 │   ├── integration/           # API endpoint tests
 │   └── unit/                  # Isolated component tests
-├── types/                      # TypeScript type definitions
-│   ├── index.ts               # Core types (models, requests, responses)
-│   └── express.d.ts           # Express augmentation
-├── errors/                     # Custom error classes
-│   └── index.ts               # AppError, AuthError, ValidationError, NotFoundError, ConflictError, and 12 more
-├── middleware/                 # Express middleware
-│   ├── auth.ts                # JWT authentication + AuthNoToken/AuthTokenInvalid audit emission
-│   ├── cors.ts                # CORS configuration and origin validation
-│   ├── errorHandler.ts        # Centralized error handling
-│   ├── logger.ts              # Pino logger configuration
-│   ├── metrics.ts             # Prometheus metrics incl. audit_write_failures_total
-│   ├── rateLimiter.ts         # Rate limiting
-│   ├── requestContext.ts      # AsyncLocalStorage wrapper (requestId/ip/userAgent for downstream audit writes)
-│   ├── requestId.ts           # Request ID tracking
-│   ├── requestLogger.ts       # Request/response logging
-│   └── validation.ts          # Joi validation schemas
-├── models/                     # Data access layer (Prisma wrappers)
-│   ├── User.ts                # User model with password hashing
-│   └── Todo.ts                # Todo model (mutations wrapped in $transaction with audit insert)
-├── routes/                     # Express routes
-│   ├── auth.ts                # Authentication routes (Register/Login success+failure audit emissions)
-│   ├── echo.ts                # Benchmark echo endpoint
-│   ├── health.ts              # Health check endpoints
-│   └── todos.ts               # Todo CRUD routes (AccessDenied audit at cross-user 404 sites)
-├── config/                     # Configuration
-│   └── env.ts                 # Environment variable validation (envalid)
-├── lib/                        # Shared utilities
-│   ├── prisma.ts              # Prisma client singleton
-│   ├── dbConnect.ts           # Startup connect-with-retry (decorrelated jitter)
-│   ├── requestContext.ts      # AsyncLocalStorage instance + getRequestContext() reader
-│   ├── auditActions.ts        # Audit action vocabulary constants
-│   └── auditLog.ts            # write() (transactional) and writeOrLog() (non-blocking)
+├── src/                        # Application source
+│   ├── app.ts                 # Express app configuration
+│   ├── index.ts               # Server startup and DB connection
+│   ├── types/                 # TypeScript type definitions
+│   │   ├── index.ts           # Core types (models, requests, responses)
+│   │   └── express.d.ts       # Express augmentation
+│   ├── errors/                # Custom error classes
+│   │   └── index.ts           # AppError, AuthError, ValidationError, NotFoundError, ConflictError, and 12 more
+│   ├── middleware/            # Express middleware
+│   │   ├── auth.ts            # JWT authentication + AuthNoToken/AuthTokenInvalid audit emission
+│   │   ├── cors.ts            # CORS configuration and origin validation
+│   │   ├── errorHandler.ts    # Centralized error handling
+│   │   ├── logger.ts          # Pino logger configuration
+│   │   ├── metrics.ts         # Prometheus metrics incl. audit_write_failures_total
+│   │   ├── rateLimiter.ts     # Rate limiting
+│   │   ├── requestContext.ts  # AsyncLocalStorage wrapper (requestId/ip/userAgent for downstream audit writes)
+│   │   ├── requestId.ts       # Request ID tracking
+│   │   ├── requestLogger.ts   # Request/response logging
+│   │   └── validation.ts      # Joi validation schemas
+│   ├── models/                # Data access layer (Prisma wrappers)
+│   │   ├── User.ts            # User model with password hashing
+│   │   └── Todo.ts            # Todo model (mutations wrapped in $transaction with audit insert)
+│   ├── routes/                # Express routes
+│   │   ├── auth.ts            # Authentication routes (Register/Login success+failure audit emissions)
+│   │   ├── echo.ts            # Benchmark echo endpoint
+│   │   ├── health.ts          # Health check endpoints
+│   │   └── todos.ts           # Todo CRUD routes (AccessDenied audit at cross-user 404 sites)
+│   ├── config/                # Configuration
+│   │   └── env.ts             # Environment variable validation (envalid)
+│   └── lib/                   # Shared utilities
+│       ├── prisma.ts          # Prisma client singleton
+│       ├── dbConnect.ts       # Startup connect-with-retry (decorrelated jitter)
+│       ├── requestContext.ts  # AsyncLocalStorage instance + getRequestContext() reader
+│       ├── auditActions.ts    # Audit action vocabulary constants
+│       └── auditLog.ts        # write() (transactional) and writeOrLog() (non-blocking)
 ├── prisma/                     # Prisma schema and migrations
 │   ├── schema.prisma          # Database schema (incl. AuditEntry model)
 │   ├── generated/             # Generated Prisma types
@@ -368,8 +371,6 @@ todo-api/
 │       └── bootstrap_roles.sql # Creates db_admin / db_app / db_auditor + default privileges
 ├── logs/                       # Log files (generated)
 ├── dist/                       # Compiled JavaScript (generated)
-├── app.ts                      # Express app configuration
-├── index.ts                    # Server startup and DB connection
 ├── tsconfig.json              # TypeScript configuration
 ├── tsconfig.test.json         # TypeScript config for tests
 ├── jest.config.ts             # Jest configuration

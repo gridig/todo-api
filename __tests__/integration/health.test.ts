@@ -1,8 +1,8 @@
 import { jest } from '@jest/globals';
 import request from 'supertest';
 import { createTestApp, connectTestDB, disconnectTestDB } from '../helpers/testSetup.js';
-import { probePool } from '../../lib/prisma.js';
-import { env } from '../../config/env.js';
+import { probePool } from '@/lib/prisma.js';
+import { env } from '@/config/env.js';
 
 const app = createTestApp();
 const bearer = `Bearer ${env.METRICS_TOKEN}`;

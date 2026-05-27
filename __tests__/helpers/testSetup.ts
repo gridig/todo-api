@@ -1,13 +1,13 @@
 import { Application } from 'express';
 import { Pool, type QueryResultRow } from 'pg';
-import type { User, JWTPayload } from '../../types/index.js';
-import { createApp } from '../../app.js';
-import prisma, { pool, probePool } from '../../lib/prisma.js';
+import type { User, JWTPayload } from '@/types/index.js';
+import { createApp } from '@/app.js';
+import prisma, { pool, probePool } from '@/lib/prisma.js';
 import jwt from 'jsonwebtoken';
 import crypto from 'crypto';
-import UserService from '../../models/User.js';
-import TodoService from '../../models/Todo.js';
-import { env } from '../../config/env.js';
+import UserService from '@/models/User.js';
+import TodoService from '@/models/Todo.js';
+import { env } from '@/config/env.js';
 
 // Privileged pool wired to the admin DSN so tests can TRUNCATE audit_entries
 // (the runtime db_app role is denied UPDATE/DELETE/TRUNCATE by design). Lazy

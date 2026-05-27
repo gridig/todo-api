@@ -1,5 +1,5 @@
 import 'dotenv/config';
-import prisma, { pool } from '../lib/prisma.js';
+import prisma, { pool } from '@/lib/prisma.js';
 import bcrypt from 'bcrypt';
 
 const SALT_ROUNDS = 10;

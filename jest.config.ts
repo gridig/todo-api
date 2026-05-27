@@ -13,14 +13,16 @@ export default {
   setupFilesAfterEnv: ['<rootDir>/__tests__/setup.ts'],
   testTimeout: 30000,
   moduleNameMapper: {
+    '^@/(.*)\\.js$': '<rootDir>/src/$1',
+    '^@/(.*)$': '<rootDir>/src/$1',
     '^(\\.{1,2}/.*)\\.js$': '$1',
   },
   testMatch: ['**/__tests__/**/*.test.ts'],
   collectCoverageFrom: [
-    'models/**/*.ts',
-    'middleware/**/*.ts',
-    'routes/**/*.ts',
-    '!middleware/logger.ts',
+    'src/models/**/*.ts',
+    'src/middleware/**/*.ts',
+    'src/routes/**/*.ts',
+    '!src/middleware/logger.ts',
     '!node_modules/**',
   ],
   coverageThreshold: {

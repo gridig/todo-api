@@ -1,5 +1,5 @@
 import 'dotenv/config';
-import prisma from '../lib/prisma.js';
+import prisma from '@/lib/prisma.js';
 
 const run = async () => {
   const user = await prisma.user.findFirst({

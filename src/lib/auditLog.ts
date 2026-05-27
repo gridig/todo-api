@@ -1,5 +1,5 @@
 import type { Logger } from 'pino';
-import { Prisma } from '../prisma/generated/prisma/client.js';
+import { Prisma } from '../../prisma/generated/prisma/client.js';
 import { auditWriteFailuresTotal } from '../middleware/metrics.js';
 import { getRequestContext } from './requestContext.js';
 

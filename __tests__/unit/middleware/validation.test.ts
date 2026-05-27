@@ -1,4 +1,4 @@
-import { schemas } from '../../../middleware/validation.js';
+import { schemas } from '@/middleware/validation.js';
 
 describe('Validation Schemas', () => {
   describe('Password Boundaries', () => {

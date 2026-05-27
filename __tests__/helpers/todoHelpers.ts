@@ -1,5 +1,5 @@
-import type { Todo } from '../../types/index.js';
-import TodoService from '../../models/Todo.js';
+import type { Todo } from '@/types/index.js';
+import TodoService from '@/models/Todo.js';
 import { randomUUID } from 'crypto';
 
 // Create test todos with specific data

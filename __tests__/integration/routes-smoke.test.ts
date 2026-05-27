@@ -1,6 +1,6 @@
 import request from 'supertest';
 import type { Application } from 'express';
-import { createApp } from '../../app.js';
+import { createApp } from '@/app.js';
 import { connectTestDB, disconnectTestDB } from '../helpers/testSetup.js';
 
 describe('Route Smoke Tests', () => {

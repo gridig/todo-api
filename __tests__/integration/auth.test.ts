@@ -1,9 +1,9 @@
 import request from 'supertest';
 import bcrypt from 'bcrypt';
 import jwt from 'jsonwebtoken';
-import UserService from '../../models/User.js';
-import prisma from '../../lib/prisma.js';
-import { env } from '../../config/env.js';
+import UserService from '@/models/User.js';
+import prisma from '@/lib/prisma.js';
+import { env } from '@/config/env.js';
 import { createTestApp, connectTestDB, disconnectTestDB } from '../helpers/testSetup.js';
 import { jest } from '@jest/globals';
 

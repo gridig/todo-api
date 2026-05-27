@@ -1,7 +1,7 @@
 import { Pool } from 'pg';
 import { Gauge } from 'prom-client';
 import { PrismaPg } from '@prisma/adapter-pg';
-import { PrismaClient } from '../prisma/generated/prisma/client.js';
+import { PrismaClient } from '../../prisma/generated/prisma/client.js';
 import { dbQueryDuration, register } from '../middleware/metrics.js';
 import logger from '../middleware/logger.js';
 import { env } from '../config/env.js';

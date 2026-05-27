@@ -1,6 +1,6 @@
 import jwt from 'jsonwebtoken';
 import { jest } from '@jest/globals';
-import { auth } from '../../../middleware/auth.js';
+import { auth } from '@/middleware/auth.js';
 
 describe('Auth Middleware', () => {
   /* eslint-disable @typescript-eslint/no-explicit-any */

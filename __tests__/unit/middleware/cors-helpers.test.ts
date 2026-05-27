@@ -1,5 +1,5 @@
 import { jest } from '@jest/globals';
-import { parseOrigins, createOriginValidator } from '../../../middleware/cors.js';
+import { parseOrigins, createOriginValidator } from '@/middleware/cors.js';
 
 describe('parseOrigins', () => {
   it('returns "*" when the input is the wildcard', () => {

@@ -6,7 +6,7 @@ import { jest } from '@jest/globals';
 // the `if (env.REDIS_URL)` init block and the Redis branch of `storeFor`
 // run during module load.
 
-jest.unstable_mockModule('../../../config/env.js', () => ({
+jest.unstable_mockModule('@/config/env.js', () => ({
   env: {
     NODE_ENV: 'test',
     REDIS_URL: 'redis://localhost:6379',
@@ -46,7 +46,7 @@ jest.unstable_mockModule('rate-limit-redis', () => ({
 
 describe('rateLimiter Redis-backed mode', () => {
   it('initializes the Redis client and binds limiters to the store when REDIS_URL is set', async () => {
-    const mod = await import('../../../middleware/rateLimiter.js');
+    const mod = await import('@/middleware/rateLimiter.js');
 
     // Module-load side effects: createClient + on('error') + connect() all fired.
     expect(mockOn).toHaveBeenCalledWith('error', expect.any(Function));

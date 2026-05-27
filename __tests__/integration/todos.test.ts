@@ -6,10 +6,10 @@ import {
   connectTestDB,
   disconnectTestDB,
 } from '../helpers/testSetup.js';
-import TodoService from '../../models/Todo.js';
-import UserService from '../../models/User.js';
+import TodoService from '@/models/Todo.js';
+import UserService from '@/models/User.js';
 import { jest } from '@jest/globals';
-import type { Todo } from '../../types/index.js';
+import type { Todo } from '@/types/index.js';
 
 const app: Application = createTestApp();
 

@@ -1,6 +1,6 @@
 import { connectTestDB, disconnectTestDB } from '../../helpers/testSetup.js';
-import UserService from '../../../models/User.js';
-import type { User } from '../../../types/index.js';
+import UserService from '@/models/User.js';
+import type { User } from '@/types/index.js';
 
 beforeAll(async () => {
   await connectTestDB();
