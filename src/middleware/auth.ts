@@ -9,13 +9,21 @@ import prisma from '../lib/prisma.js';
 import type { RequestWithLogger } from '../types/index.js';
 
 const TOKEN_REASON_MAX_LEN = 100;
+// Generous cap — real JWTs run ~1–2 KiB. Treats oversized headers as empty so
+// we never feed an attacker-controlled multi-MB string into toLowerCase().
+const MAX_AUTH_HEADER_LEN = 8192;
+const BEARER_SCHEME = 'bearer ';
 
 export const auth = (req: RequestWithLogger, res: Response, next: NextFunction): void => {
   const { log, id: requestId } = req;
   try {
-    const authHeader = req.header('Authorization');
+    const rawHeader = req.header('Authorization') ?? '';
+    const authHeader = rawHeader.length > MAX_AUTH_HEADER_LEN ? '' : rawHeader;
+    const token = authHeader.toLowerCase().startsWith(BEARER_SCHEME)
+      ? authHeader.slice(BEARER_SCHEME.length).trim()
+      : '';
 
-    if (!authHeader) {
+    if (!token) {
       log.warn(
         {
           path: req.path,
@@ -26,30 +34,6 @@ export const auth = (req: RequestWithLogger, res: Response, next: NextFunction):
       void writeOrLog(
         prisma,
         { action: AuditAction.AuthNoToken, outcome: 'failure', outcomeReason: 'no-auth-header' },
-        log,
-      );
-      const error = new NoTokenError();
-      res.status(error.statusCode).json({
-        ...error.toJSON(),
-        requestId,
-      });
-      return;
-    }
-
-    const match = /^Bearer\s+(.+)$/i.exec(authHeader);
-    const token = match?.[1];
-
-    if (!token) {
-      log.warn(
-        {
-          path: req.path,
-          ip: req.ip,
-        },
-        'Authentication failed - empty token',
-      );
-      void writeOrLog(
-        prisma,
-        { action: AuditAction.AuthNoToken, outcome: 'failure', outcomeReason: 'empty-bearer' },
         log,
       );
       const error = new NoTokenError();
