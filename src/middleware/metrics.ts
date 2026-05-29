@@ -141,11 +141,14 @@ export const metricsHandler = async (_req: Request, res: Response): Promise<void
 
 // --- Helpers ---
 
+// Unmatched requests share a single label so scans/typos/trailing-slash quirks
+// can't blow up Prometheus cardinality. The actual path is still in access logs
+// if you need to investigate a specific 404.
+const UNMATCHED_ROUTE = 'unmatched';
+
 const normalizeRoute = (req: Request): string => {
-  // Use the matched Express route pattern if available, otherwise fall back to path
   if (req.route?.path) {
     return req.baseUrl + (req.route.path === '/' ? '' : req.route.path);
   }
-  // Collapse UUID-like segments to :id to avoid high-cardinality labels
-  return req.path.replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, ':id');
+  return UNMATCHED_ROUTE;
 };

@@ -105,6 +105,40 @@ Worked example — Railway Hobby (6 replicas, 8 workers each, Postgres `max_conn
 DB_POOL_MAX = floor(100 / 8 / 6) - 1 = 1  →  set DB_POOL_MAX=2 with some headroom
 ```
 
+The sizing math above only counts **app-side** consumers. Off-app pools eat the same budget and are easy to forget:
+
+- `prisma migrate deploy` at boot (`db_admin`) — one short-lived connection per replica.
+- `pnpm run bench:seed` and other local scripts pointed at the same DB — each spins up its own pg pool (default `max=10`).
+- `psql` sessions for ops/debug.
+- pgAdmin, Metabase, or any BI tool connected to the same DB.
+- Managed-DB extras: Railway, RDS, etc. reserve some slots for `superuser_reserved_connections` (default `3`) plus internal monitoring. **Your usable ceiling is `max_connections − superuser_reserved_connections − platform_overhead`, not `max_connections`.**
+
+#### Diagnostics
+
+When the sizing math is wrong, the symptom is fast 500s under load with this Pino-serialized error:
+
+```
+PrismaClientKnownRequestError: Too many database connections opened: remaining
+connection slots are reserved for roles with the SUPERUSER attribute
+  code: P2037
+  meta.driverAdapterError.cause.originalCode: 53300  (Postgres TOO_MANY_CONNECTIONS)
+```
+
+Failures are fast (<10ms) because the adapter rejects at `connect()`, not after query work. `db_pool_waiting_clients` stays at `0` — connections are being **refused**, not queued — so the app-side pool metrics can look healthy while the DB is the bottleneck. The signal is the rejected-503-rate, not pool utilization.
+
+To inspect the live state, connect as the platform superuser and run:
+
+```sql
+SHOW max_connections;
+SHOW superuser_reserved_connections;
+SELECT usename, count(*), state
+FROM pg_stat_activity
+GROUP BY usename, state
+ORDER BY count(*) DESC;
+```
+
+The `usename` breakdown tells you which role is over-consuming. Typical fixes, in order of effort: drop `DB_POOL_MAX`, close orphaned `psql` / BI sessions, scale the DB plan, or front Postgres with PgBouncer (transaction mode) so each replica's pool size becomes a logical, not physical, limit.
+
 #### Benchmark evidence
 
 The default `DB_POOL_MAX=10` causes a measurable latency cliff under high load — see [benchmarks.md](benchmarks.md). Average request duration jumps from 4.17ms (1,402 req/s) to 205ms (1,304 req/s) between medium and high load: pool exhaustion forces requests to queue behind the 10 in-flight connections. Sizing per the table above pushes the cliff out, and `DB_QUERY_TIMEOUT_MS` provides a hard backstop so a single slow query cannot exhaust the pool indefinitely.
