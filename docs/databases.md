@@ -351,7 +351,7 @@ pg1-path=/var/lib/postgresql/data
 
 ### Prisma Integration
 
-Prisma manages the table schema. Hypertable creation, retention policies, role grants, and TimescaleDB-specific features use raw SQL inside Prisma migrations (consistent with existing `$queryRaw` usage in [`src/models/Todo.ts`](../src/models/Todo.ts)). Migrations run as the `todo_admin` role (see **Database Role Model** below); the application runtime connects as `todo_app`.
+Prisma manages the table schema. Hypertable creation, retention policies, role grants, and TimescaleDB-specific features use raw SQL inside Prisma migrations (consistent with existing `$queryRaw` usage in [`src/models/Todo.ts`](../src/models/Todo.ts)). Migrations run as the `db_admin` role (see **Database Role Model** below); the application runtime connects as `db_app`.
 
 ### Hypertable Design
 
@@ -425,29 +425,29 @@ REVOKE-based immutability only works if the application connects as a non-superu
 
 | Role                | Used by                                                   | Privileges                                                                                     |
 | ------------------- | --------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
-| `todo_admin`        | Prisma migrations (CI deploy step, manual ops)            | Schema OWNER, DDL, all DML                                                                     |
-| `todo_app`          | Application runtime ([`src/lib/prisma.ts`](../src/lib/prisma.ts)) | `SELECT, INSERT, UPDATE, DELETE` on `users`, `todos`; `SELECT, INSERT` only on `audit_entries` |
-| `todo_audit_reader` | Security/compliance dashboards, ad-hoc auditor queries    | `SELECT` on `audit_entries` only                                                               |
+| `db_admin`        | Prisma migrations (CI deploy step, manual ops)            | Schema OWNER, DDL, all DML                                                                     |
+| `db_app`          | Application runtime ([`src/lib/prisma.ts`](../src/lib/prisma.ts)) | `SELECT, INSERT, UPDATE, DELETE` on `users`, `todos`; `SELECT, INSERT` only on `audit_entries` |
+| `db_auditor` | Security/compliance dashboards, ad-hoc auditor queries    | `SELECT` on `audit_entries` only                                                               |
 
 ```sql
 -- Role bootstrap (run once per environment as superuser; prisma/sql/bootstrap_roles.sql)
-CREATE ROLE todo_admin LOGIN PASSWORD :'ADMIN_PASS';
-CREATE ROLE todo_app LOGIN PASSWORD :'APP_PASS';
-CREATE ROLE todo_audit_reader LOGIN PASSWORD :'READER_PASS';
+CREATE ROLE db_admin LOGIN PASSWORD :'ADMIN_PASS';
+CREATE ROLE db_app LOGIN PASSWORD :'APP_PASS';
+CREATE ROLE db_auditor LOGIN PASSWORD :'READER_PASS';
 
-ALTER SCHEMA public OWNER TO todo_admin;
-GRANT USAGE ON SCHEMA public TO todo_app, todo_audit_reader;
+ALTER SCHEMA public OWNER TO db_admin;
+GRANT USAGE ON SCHEMA public TO db_app, db_auditor;
 
 -- Applied alongside the audit_entries migration
-GRANT SELECT, INSERT ON audit_entries TO todo_app;
-REVOKE UPDATE, DELETE, TRUNCATE ON audit_entries FROM todo_app;
-GRANT SELECT ON audit_entries TO todo_audit_reader;
+GRANT SELECT, INSERT ON audit_entries TO db_app;
+REVOKE UPDATE, DELETE, TRUNCATE ON audit_entries FROM db_app;
+GRANT SELECT ON audit_entries TO db_auditor;
 ```
 
 Two environment variables wire this up:
 
-- `DATABASE_URL` — the application connection (`todo_app`); read by [`src/config/env.ts`](../src/config/env.ts)
-- `DATABASE_MIGRATE_URL` — the migrations connection (`todo_admin`); used only by `pnpm run migrate:deploy`
+- `DATABASE_URL` — the application connection (`db_app`); read by [`src/config/env.ts`](../src/config/env.ts)
+- `DATABASE_MIGRATE_URL` — the migrations connection (`db_admin`); used only by `pnpm run migrate:deploy`
 
 **Tests.** [`__tests__/helpers/testSetup.ts`](../__tests__/helpers/testSetup.ts) needs a privileged second pool wired to `DATABASE_MIGRATE_URL` so `cleanupTestData()` can `TRUNCATE audit_entries RESTART IDENTITY CASCADE` — the test role inherits the REVOKE and cannot delete from the table directly. This is by design: it forces the test suite to use the same immutability surface as production.
 
@@ -537,7 +537,7 @@ The stable action vocabulary lives in `src/lib/auditActions.ts` as exported cons
 | TimescaleDB extension missing (e.g., wrong image deployed) | Migration fails at `CREATE EXTENSION timescaledb`                                                    | Deploy blocked; alert via CI                                                                                                  |
 | Hypertable chunk creation lag                              | `SELECT count(*) FROM timescaledb_information.chunks WHERE hypertable_name='audit_entries'` plateaus | Daily check job; alert if no new chunk in 8 days                                                                              |
 | Retention policy disabled / misconfigured                  | `SELECT * FROM timescaledb_information.jobs WHERE proc_name='policy_retention'` returns empty        | Daily check; alert if missing                                                                                                 |
-| REVOKE accidentally rolled back                            | Smoke probe attempts `UPDATE audit_entries SET ...` as `todo_app` and expects 42501                  | Post-deploy job in [`.github/workflows/deploy.yml`](../.github/workflows/deploy.yml); fails the deploy if the UPDATE succeeds |
+| REVOKE accidentally rolled back                            | Smoke probe attempts `UPDATE audit_entries SET ...` as `db_app` and expects 42501                  | Post-deploy job in [`.github/workflows/deploy.yml`](../.github/workflows/deploy.yml); fails the deploy if the UPDATE succeeds |
 | pgBackRest backup fails                                    | `pgbackrest info` exit code non-zero                                                                 | Sidecar emits Prometheus metric; alert on stale `last_full_backup_age_seconds` > 30h                                          |
 | WAL archive lag                                            | `pg_stat_archiver.last_failed_wal` non-null or `last_archived_time` stale                            | Alert if lag > 5 min (RPO budget)                                                                                             |
 | Bucket lifecycle policy drift                              | Periodic check against expected retention                                                            | Quarterly review during DR drill                                                                                              |
@@ -563,11 +563,11 @@ The **outbox migration path** is documented but deliberately deferred: at curren
 TimescaleDB + the role model + REVOKE provide layered immutability:
 
 - **Application layer.** [`src/lib/auditLog.ts`](../src/lib/auditLog.ts) exposes only `write()`; no `update`, `delete`, or batch methods exist for any caller to misuse.
-- **Database layer.** `todo_app` has `SELECT, INSERT` only; `REVOKE UPDATE, DELETE, TRUNCATE` ensures that even a compromised application process or SQL-injection payload cannot tamper with the audit trail.
+- **Database layer.** `db_app` has `SELECT, INSERT` only; `REVOKE UPDATE, DELETE, TRUNCATE` ensures that even a compromised application process or SQL-injection payload cannot tamper with the audit trail.
 - **Storage layer.** Once a chunk is older than the compression policy threshold (see **Scale Planning**), the chunk's underlying files become read-only and writes raise an error.
 - **Retention.** `add_retention_policy('audit_entries', INTERVAL '1 year')` drops chunks via `drop_chunks` — operating on time boundaries, not row-level DELETEs, so it bypasses the REVOKE while remaining auditable: the dropped time range is the retention boundary, deterministic and inspectable in `timescaledb_information.jobs`.
-- **Separation of duties.** `todo_audit_reader` is the role auditors and the security team use. Read-only by construction; cannot tamper even with leaked credentials.
-- **Tamper evidence.** A post-deploy smoke probe attempts `UPDATE audit_entries` as `todo_app` and fails the deploy if the UPDATE succeeds, catching any accidental privilege escalation before it widens the blast radius.
+- **Separation of duties.** `db_auditor` is the role auditors and the security team use. Read-only by construction; cannot tamper even with leaked credentials.
+- **Tamper evidence.** A post-deploy smoke probe attempts `UPDATE audit_entries` as `db_app` and fails the deploy if the UPDATE succeeds, catching any accidental privilege escalation before it widens the blast radius.
 
 ---
 

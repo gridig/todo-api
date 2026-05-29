@@ -115,8 +115,9 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version: ${{ env.NODE_VERSION }}
-      # TODO: ratchet --audit-level back to high once the Prisma-transitive vuln
-      # backlog is cleared. Tracked as a follow-up to moving `prisma` from
-      # dependencies to devDependencies once `prisma migrate deploy` is off the
-      # Dockerfile runtime CMD.
-      - run: pnpm audit --prod --audit-level=critical
+      # `prisma` (CLI) stays in `dependencies`: migrations run as Railway's
+      # pre-deploy command (railway.json), which executes inside the prod image,
+      # so the CLI must ship there. The prod tree currently has no high/critical
+      # advisories, so we gate at `high` (tighten to `moderate` only once the
+      # tree is clean at that level).
+      - run: pnpm audit --prod --audit-level=high

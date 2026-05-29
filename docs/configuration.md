@@ -31,7 +31,7 @@ Audit-log immutability requires three Postgres roles so SOC 2 tamper-evidence (C
 | `db_app`     | `DATABASE_URL`             | Runtime CRUD on app tables; `INSERT` + `SELECT` on `audit_entries` (UPDATE/DELETE/TRUNCATE are REVOKED so an app-layer compromise can't tamper). |
 | `db_auditor` | external auditor sessions  | `SELECT` on `audit_entries` only.                                                                                                              |
 
-Roles are created by `prisma/sql/bootstrap_roles.sql`. The Docker Compose Postgres service mounts this file into `/docker-entrypoint-initdb.d/`, so a fresh `docker compose up` provisions everything. CI runs the same file via `psql`. Production (Railway) creates the roles via the platform secrets UI; the bootstrap SQL is not run there.
+Roles are created by `prisma/sql/bootstrap_roles.sql`. The Docker Compose Postgres service mounts this file into `/docker-entrypoint-initdb.d/`, so a fresh `docker compose up` provisions everything. CI runs the same file via `psql`. Production (Railway) is bootstrapped once with [`prisma/sql/bootstrap_roles_prod.sql`](../prisma/sql/bootstrap_roles_prod.sql) — run as a superuser before the first `prisma migrate deploy` (it takes the role passwords as `psql -v` variables and is idempotent / safe to re-run). A deploy preflight check ([`scripts/preflight-roles.ts`](../scripts/preflight-roles.ts)) runs as part of the Railway pre-deploy command (`railway.json`) and fails the deploy fast with a clear message if the roles are missing, rather than letting the migration crash-loop. See [operations.md](operations.md).
 
 Generate a secure JWT secret for production:
 

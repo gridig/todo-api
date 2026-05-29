@@ -48,4 +48,8 @@ EXPOSE 3001
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
   CMD node -e "fetch('http://localhost:3001/health/ready').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"
 
-CMD ["sh", "-c", "pnpm exec prisma migrate deploy && node dist/src/index.js"]
+# Migrations run as the Railway pre-deploy command (railway.json → deploy.preDeployCommand),
+# not here — so a failed migration aborts the deploy and keeps the old version serving,
+# instead of crash-looping the app container. The app's own boot gates (TimescaleDB +
+# audit tamper-probe) still run in src/index.ts.
+CMD ["node", "dist/src/index.js"]
