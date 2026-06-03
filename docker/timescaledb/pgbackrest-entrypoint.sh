@@ -37,6 +37,10 @@ mkdir -p /etc/pgbackrest /var/log/pgbackrest "${PGBACKREST_REPO_PATH:-/var/lib/p
   echo "pg1-path=${PG_PATH}"
   echo "pg1-port=${PG_PORT:-5432}"
   echo "pg1-socket-path=${PG_SOCKET_PATH:-/var/run/postgresql}"
+  # Connect as the cluster superuser, not the invoking OS user — so ops commands
+  # run via `docker compose exec` / `railway exec` (as root) don't try a DB role
+  # named "root". (The scheduler already runs as postgres via su-exec.)
+  echo "pg1-user=${PGBACKREST_PG1_USER:-${POSTGRES_USER:-postgres}}"
 } > "$CONF"
 
 # archive_command runs as the postgres OS user and must be able to read the config.

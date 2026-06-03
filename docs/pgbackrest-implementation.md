@@ -135,6 +135,9 @@ mkdir -p /etc/pgbackrest /var/log/pgbackrest "${PGBACKREST_REPO_PATH:-/var/lib/p
   echo "pg1-path=${PG_PATH}"
   echo "pg1-port=${PG_PORT:-5432}"
   echo "pg1-socket-path=${PG_SOCKET_PATH:-/var/run/postgresql}"
+  # Connect as the cluster superuser, not the invoking OS user — so ops commands
+  # run via docker/railway exec (as root) don't try a DB role named "root".
+  echo "pg1-user=${PGBACKREST_PG1_USER:-${POSTGRES_USER:-postgres}}"
 } > "$CONF"
 
 # archive_command runs as the postgres OS user and must be able to read the config.
@@ -344,6 +347,12 @@ The `pgbackrest` sidecar service from the old design is removed. For a fast loca
 ```bash
 #!/usr/bin/env bash
 set -euo pipefail
+
+# pgBackRest must run as the cluster owner (postgres), not root: it connects as
+# the invoking OS user and writes repo files the postgres-owned scheduler manages.
+# Re-exec under postgres when started as root (the docker/railway exec default).
+if [ "$(id -u)" -eq 0 ]; then exec su-exec postgres "$0" "$@"; fi
+
 STANZA="${PGBACKREST_STANZA:-todo-api}"
 
 echo "=== pgBackRest Bootstrap (stanza: ${STANZA}) ==="
@@ -467,6 +476,7 @@ Also add an object-lifecycle rule on the Railway Bucket to expire objects past t
 | `PGBACKREST_REPO_PATH` | `/var/lib/pgbackrest` | POSIX repo path (local only) |
 | `PGBACKREST_CIPHER_PASS` | _(required)_ | AES-256 passphrase (32+ chars) |
 | `PGBACKREST_STANZA` | `todo-api` | Stanza name |
+| `PGBACKREST_PG1_USER` | `$POSTGRES_USER` or `postgres` | DB role pgBackRest connects as (cluster superuser). Lets root-invoked ops commands work instead of trying a role named after the OS user |
 | `PGBACKREST_RETENTION_FULL` | `35` | Daily full backups to retain (≈ PITR window in days) |
 | `PGBACKREST_RETENTION_DIFF` | `14` | Differentials to retain |
 | `PGBACKREST_RETENTION_ARCHIVE` | `35` | Fulls' worth of WAL to retain |
