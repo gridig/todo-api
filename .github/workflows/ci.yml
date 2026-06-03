@@ -121,3 +121,13 @@ jobs:
       # advisories, so we gate at `high` (tighten to `moderate` only once the
       # tree is clean at that level).
       - run: pnpm audit --prod --audit-level=high
+
+  docker-images:
+    name: Docker images
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      # Validates the TimescaleDB + pgBackRest image builds (apk pgbackrest resolves,
+      # scripts copy). Config is validated at stanza-create runtime, not build time.
+      - name: Build TimescaleDB + pgBackRest image
+        run: docker build -f docker/timescaledb/Dockerfile docker/timescaledb/

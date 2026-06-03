@@ -80,3 +80,52 @@ was recovered as follows. Run against the prod DB as a superuser (via the public
 > **Never edit a committed, already-attempted migration** to work around this — Prisma checksums each
 > migration file, so editing one breaks every environment that already ran it. Fix the environment, or
 > add a new migration.
+
+## Database restore (disaster recovery)
+
+The TimescaleDB service runs pgBackRest co-located in its container, archiving WAL continuously and
+taking scheduled base backups to a Railway Bucket. Design and build details are in
+[databases.md](databases.md) and [pgbackrest-implementation.md](pgbackrest-implementation.md).
+
+### Recovery targets
+
+| Metric | Target | Bounded by |
+| ------ | ------ | ---------- |
+| RPO | ≤ 5 minutes | `archive_timeout = 60s` + WAL push latency |
+| RTO | ≤ 30 minutes | Provision + restore + WAL replay + app repoint |
+
+> pgBackRest takes **physical** backups of the whole cluster — `pg_authid` (roles + passwords), all
+> databases, and the `REVOKE`-based audit immutability are included. A restore does **not** need role
+> re-bootstrap (that is only for logical `pg_dump` restores); `bootstrap_roles*.sql` does not run on a
+> restored volume and does not need to.
+
+### Scenario A: full database loss
+
+1. **Stop writes** — stop the `todo-api` service so nothing writes during recovery.
+2. **Provision a fresh timescaledb service** from `docker/timescaledb/Dockerfile` with an **empty** data
+   volume and the same `PGBACKREST_*` env (same bucket, keys, cipher pass, stanza).
+3. **Set restore env** on that service and deploy: `PGBACKREST_RESTORE=1`. The entrypoint restores into
+   the empty `PGDATA` before Postgres starts; Postgres then replays WAL to the latest point and promotes.
+4. **Verify** (inside the service):
+   - `psql -c '\du'` — `db_admin`, `db_app`, `db_auditor` present
+   - `psql -c '\dt'` — `users`, `todos`, `audit_entries`, `_prisma_migrations` present
+   - Immutability: `SET ROLE db_app; UPDATE audit_entries SET action='x' WHERE false;` → must fail `42501`
+5. **Clear restore env** — set `PGBACKREST_RESTORE=0` (or remove it) and redeploy, so the service does
+   not re-restore on its next restart.
+6. **Repoint the app** — point `DATABASE_URL` / `DATABASE_MIGRATE_URL` at the restored service and
+   redeploy `todo-api`. Confirm startup logs: `preflight-roles: OK`, `Audit-log tamper-evidence probe
+   passed`, `Server started successfully`, and `/health/ready` → 200.
+
+### Scenario B: point-in-time recovery (bad migration / data corruption)
+
+Same as Scenario A, but in step 3 also set
+`PGBACKREST_RESTORE_ARGS=--type=time --target="2026-06-01 12:00:00+00"`. Add `--target-exclusive` to
+stop *before* the bad event; use `--delta` instead of an empty volume to restore in place over existing
+data.
+
+### Quarterly restore drill (SOC 2 A1.3)
+
+1. Provision a **throwaway** timescaledb service; restore the latest backup (Scenario A, steps 2–4).
+2. Point a scratch `todo-api` at it; run `pnpm test:integration`.
+3. Document: date, backup ID (`pgbackrest --stanza=todo-api info`), wall-clock restore time, pass/fail counts.
+4. Tear down. File the report as SOC 2 A1.3 evidence.

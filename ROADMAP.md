@@ -13,12 +13,14 @@ This document outlines the infrastructure and production-readiness work required
 **Impact**: High
 **SOC 2**: A1.2 (Recovery Objectives), A1.3 (Recovery Testing), C1.1 (Confidential Data Protection)
 
-- [ ] Set up automated `pg_dump` to encrypted object storage (S3, GCS, etc.)
-- [ ] Define backup schedule and retention policy (minimum daily, 30-day retention)
-- [ ] Document and test restore procedure quarterly
-- [ ] Define RPO (Recovery Point Objective) and RTO (Recovery Time Objective)
-- [ ] Add backup monitoring/alerting (notify on failure)
-- [ ] Ensure backups are encrypted and access-controlled
+- [ ] Set up continuous WAL archiving + scheduled base backups (pgBackRest) to an encrypted Railway Bucket (S3-compatible), enabling point-in-time recovery — *implemented + locally verified; awaiting prod deploy* — see [docs/pgbackrest-implementation.md](docs/pgbackrest-implementation.md)
+- [x] Define backup schedule and retention policy (minimum daily, 30-day retention; design uses daily fulls + 6h diffs, 35-day PITR window)
+- [ ] Document and test restore procedure quarterly — *runbook in [docs/operations.md](docs/operations.md#database-restore-disaster-recovery); restore validated locally (WAL replay + roles); first prod drill + quarterly cadence pending*
+- [x] Define RPO (Recovery Point Objective) and RTO (Recovery Time Objective) — RPO ≤ 5 min, RTO ≤ 30 min
+- [ ] Add backup monitoring/alerting (notify on failure) — *log-based Railway alert on `ERROR:` now; Prometheus rules tracked under Monitoring & Observability*
+- [x] Ensure backups are encrypted and access-controlled — AES-256-CBC repo cipher + bucket credentials in Railway secret store
+
+**Status**: Implemented on branch `db-backup` (co-located pgBackRest in the TimescaleDB image) and verified locally — image builds, WAL archiving + scheduled full/diff work, and a restore replays WAL and brings back roles. Remaining for SOC 2 sign-off: production deploy, the first restore drill (A1.3 evidence), and Prometheus alerting (under Monitoring & Observability).
 
 **Why**: SOC 2 A1.2 requires documented recovery objectives. A1.3 requires periodic recovery testing. Auditors will ask for evidence of both the backup process and successful restore tests.
 

@@ -39,6 +39,35 @@ Generate a secure JWT secret for production:
 node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 ```
 
+## Database Backups (pgBackRest)
+
+These variables configure pgBackRest, which runs **co-located in the `timescaledb` service container**
+(not the app). They are **not** read by `src/config/env.ts` — set them on the timescaledb Railway
+service. Locally, `docker-compose.yml` sets a POSIX repo so no S3 credentials are needed. Design and
+build details: [pgbackrest-implementation.md](pgbackrest-implementation.md).
+
+| Variable | Default | Description |
+| -------- | ------- | ----------- |
+| `PGBACKREST_REPO_TYPE` | `s3` | `s3` (prod) or `posix` (local) |
+| `PGBACKREST_REPO_S3_ENDPOINT` | _(required for s3)_ | Railway Bucket S3 endpoint URL |
+| `PGBACKREST_REPO_S3_BUCKET` | _(required for s3)_ | Bucket name |
+| `PGBACKREST_REPO_S3_KEY` | _(required for s3)_ | Access key ID |
+| `PGBACKREST_REPO_S3_KEY_SECRET` | _(required for s3)_ | Secret access key |
+| `PGBACKREST_REPO_S3_REGION` | `auto` | S3 region |
+| `PGBACKREST_REPO_PATH` | `/var/lib/pgbackrest` | POSIX repo path (local only) |
+| `PGBACKREST_CIPHER_PASS` | _(required)_ | AES-256 passphrase (32+ chars) |
+| `PGBACKREST_STANZA` | `todo-api` | Stanza name |
+| `PGBACKREST_RETENTION_FULL` | `35` | Daily full backups to retain (≈ PITR window in days) |
+| `PGBACKREST_RETENTION_DIFF` | `14` | Differentials to retain |
+| `PGBACKREST_RETENTION_ARCHIVE` | `35` | Fulls' worth of WAL to retain |
+| `PGBACKREST_PROCESS_MAX` | `2` | Parallel processes for backup/restore |
+| `PGBACKREST_FULL_HOUR_UTC` | `2` | UTC hour for the daily full window |
+| `PGBACKREST_FULL_MAX_AGE_SEC` | `93600` | Hard catch-up ceiling for the daily full (26h) — runs regardless of window once the last full is this old; keep below the 30h full-age alert |
+| `PGBACKREST_DIFF_INTERVAL_SEC` | `21600` | Differential interval (seconds) |
+| `PGBACKREST_LOOP_SLEEP_SEC` | `60` | Scheduler check interval (seconds) |
+| `PGBACKREST_RESTORE` | `0` | `1` = restore into PGDATA before Postgres starts (DR only — see [operations.md](operations.md)) |
+| `PGBACKREST_RESTORE_ARGS` | _(empty)_ | Extra restore flags, e.g. `--type=time --target=...`, `--delta` |
+
 ## Optional Variables
 
 ### Application
