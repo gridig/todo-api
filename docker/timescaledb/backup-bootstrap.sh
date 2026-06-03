@@ -5,6 +5,13 @@
 # The scheduler also self-bootstraps a first full on an empty stanza; this script
 # is for explicit, verified control.
 set -euo pipefail
+
+# pgBackRest must run as the cluster owner (postgres), not root: it connects to
+# Postgres as the invoking OS user, and a full backup writes repo files that the
+# postgres-owned scheduler must later manage. Re-exec under postgres when started
+# as root (the docker/railway exec default).
+if [ "$(id -u)" -eq 0 ]; then exec su-exec postgres "$0" "$@"; fi
+
 STANZA="${PGBACKREST_STANZA:-todo-api}"
 
 echo "=== pgBackRest Bootstrap (stanza: ${STANZA}) ==="

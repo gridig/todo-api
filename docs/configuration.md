@@ -57,6 +57,7 @@ build details: [pgbackrest-implementation.md](pgbackrest-implementation.md).
 | `PGBACKREST_REPO_PATH` | `/var/lib/pgbackrest` | POSIX repo path (local only) |
 | `PGBACKREST_CIPHER_PASS` | _(required)_ | AES-256 passphrase (32+ chars) |
 | `PGBACKREST_STANZA` | `todo-api` | Stanza name |
+| `PGBACKREST_PG1_USER` | `$POSTGRES_USER` or `postgres` | DB role pgBackRest connects as (cluster superuser); lets root-invoked ops commands work |
 | `PGBACKREST_RETENTION_FULL` | `35` | Daily full backups to retain (≈ PITR window in days) |
 | `PGBACKREST_RETENTION_DIFF` | `14` | Differentials to retain |
 | `PGBACKREST_RETENTION_ARCHIVE` | `35` | Fulls' worth of WAL to retain |
