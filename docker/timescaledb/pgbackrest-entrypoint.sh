@@ -1,10 +1,31 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Railway injects PGHOST/PGPORT pointing at the remote service address; clear them
+# so Postgres' own startup client tools and pgBackRest use the local socket.
+unset PGHOST PGPORT
+
 CONF="/etc/pgbackrest/pgbackrest.conf"
 STANZA="${PGBACKREST_STANZA:-todo-api}"
 REPO_TYPE="${PGBACKREST_REPO_TYPE:-s3}"
 PG_PATH="${PGDATA:-/var/lib/postgresql/data}"
+
+# A backup misconfiguration must NEVER stop the database from starting. If the repo
+# isn't fully configured, boot Postgres without archiving and log loudly instead of
+# crash-looping the container.
+missing=""
+if [[ "$REPO_TYPE" == "s3" ]]; then
+  for v in PGBACKREST_REPO_S3_ENDPOINT PGBACKREST_REPO_S3_BUCKET \
+           PGBACKREST_REPO_S3_KEY PGBACKREST_REPO_S3_KEY_SECRET PGBACKREST_CIPHER_PASS; do
+    [[ -n "${!v:-}" ]] || missing="${missing} ${v}"
+  done
+fi
+
+if [[ -n "$missing" ]]; then
+  echo "WARNING: pgBackRest repo not configured (missing:${missing})." >&2
+  echo "WARNING: starting Postgres WITHOUT archiving/backups. Set the vars and redeploy to enable." >&2
+  exec docker-entrypoint.sh postgres
+fi
 
 mkdir -p /etc/pgbackrest /var/log/pgbackrest "${PGBACKREST_REPO_PATH:-/var/lib/pgbackrest}"
 
@@ -38,7 +59,7 @@ mkdir -p /etc/pgbackrest /var/log/pgbackrest "${PGBACKREST_REPO_PATH:-/var/lib/p
   echo "pg1-port=${PG_PORT:-5432}"
   echo "pg1-socket-path=${PG_SOCKET_PATH:-/var/run/postgresql}"
   # Connect as the cluster superuser, not the invoking OS user — so ops commands
-  # run via `docker compose exec` / `railway exec` (as root) don't try a DB role
+  # run via `docker compose exec` / `railway ssh` (as root) don't try a DB role
   # named "root". (The scheduler already runs as postgres via su-exec.)
   echo "pg1-user=${PGBACKREST_PG1_USER:-${POSTGRES_USER:-postgres}}"
 } > "$CONF"
