@@ -46,13 +46,39 @@ instead of crash-looping the app.
 
 Transient connection/query failures are retried with decorrelated-jitter backoff — Railway's
 `*.railway.internal` private networking can take a few seconds to come up in a fresh pre-deploy
-container (the 2026-07-05 deploy failure), so a single early attempt can time out spuriously. Each
+container, so a single early attempt can time out spuriously. (The retry also makes a _persistent_
+failure legible: six spaced attempts all timing out is what exposed the 2026-07-05 outage below as a
+down database rather than a blip.) Each
 failed attempt is logged with its number and next delay. The knobs are the same as the app's startup
 retry, read leniently from plain env (fallback on missing/unparseable values, no envalid):
 `DB_CONNECT_MAX_RETRIES` (default 5), `DB_CONNECT_INITIAL_DELAY_MS` (default 1000),
 `DB_CONNECTION_TIMEOUT_MS` (default 5000), with the jitter capped at 15 s — worst case ≈ 73 s with
 defaults. The deterministic outcomes — missing DSN, missing roles — still fail immediately without
 retrying.
+
+### Deploying the timescaledb image (Deploy DB workflow)
+
+Railway services are deliberately **not** connected to the GitHub repo as a source — repo-connected
+services build on every push, bypassing CI/CD. All deploys go through GitHub Actions via `railway up`:
+the app via `deploy.yml`, the database image via `deploy-db.yml` (triggered by changes under
+`docker/timescaledb/**`, or manually). The DB deploy must use
+`railway up docker/timescaledb --path-as-root` — `railway up` archives the linked project directory
+regardless of cwd, so without `--path-as-root` the app's root `Dockerfile` gets built onto the
+timescaledb service.
+
+Lessons from the 2026-06-04 → 2026-07-05 staging outage (DB down a month, every deploy failing at
+preflight):
+
+- **Changing service settings does not change the running image.** Setting the start command to
+  `/usr/local/bin/pgbackrest-entrypoint.sh` while the service still ran the stock timescale image
+  crash-looped the replacement and — because the service is volume-backed, so the old deployment stops
+  before the new one starts — took the database down entirely. Ship the image first (Deploy DB
+  workflow); avoid start-command overrides that reference files only some images contain.
+- **A misnamed `PGBACKREST_*` variable silently disables backups.** The entrypoint treats missing
+  repo vars as "not configured" and boots Postgres _without archiving_ by design (a backup
+  misconfiguration must never stop the database). After any variable change, check the boot logs: a
+  healthy boot shows `stanza-create … completed successfully` and a successful `archive-push`; a
+  misconfigured one shows `WARNING: pgBackRest repo not configured (missing: …)`.
 
 ## Recovering a failed migration (Prisma P3009)
 
