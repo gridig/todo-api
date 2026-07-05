@@ -100,7 +100,7 @@ jobs:
         run: psql "postgresql://postgres:postgres@localhost:5432/todo_api" -v ON_ERROR_STOP=1 -f prisma/sql/bootstrap_roles.sql
       - run: pnpm exec prisma migrate deploy
       - run: pnpm run test:ci
-      - uses: codecov/codecov-action@v6
+      - uses: codecov/codecov-action@v7
         if: always()
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
