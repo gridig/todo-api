@@ -22,6 +22,7 @@
     "noUncheckedIndexedAccess": true,
     "exactOptionalPropertyTypes": true,
     "typeRoots": ["./node_modules/@types", "./src/types"],
+    "types": ["node", "jest"],
     "paths": {
       "@/*": ["./src/*"]
     }

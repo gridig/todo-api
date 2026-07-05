@@ -1,0 +1,36 @@
+name: Deploy DB
+
+on:
+  push:
+    branches: [main]
+    paths: ['docker/timescaledb/**']
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Target environment'
+        required: true
+        type: choice
+        options: [staging, production]
+        default: staging
+
+concurrency:
+  group: deploy-db-${{ inputs.environment || 'staging' }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment || 'staging' }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Railway CLI
+        run: npm install -g @railway/cli
+
+      # --path-as-root is load-bearing: railway up archives the linked project
+      # directory regardless of cwd, so without it the app's root Dockerfile
+      # gets built onto the timescaledb service (2026-07-05 incident).
+      - name: Deploy timescaledb image to Railway
+        run: railway up docker/timescaledb --path-as-root --ci --service timescaledb
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
