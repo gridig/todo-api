@@ -41,18 +41,24 @@ curl http://localhost:3001/health/ready
 
 ## Services
 
-### Postgres
+### Postgres (TimescaleDB + pgBackRest)
 
-| Property     | Value                             |
-| ------------ | --------------------------------- |
-| Image        | `postgres:16`                     |
-| Container    | `todo-postgres`                   |
-| Port         | `5432`                            |
-| User         | `postgres`                        |
-| Password     | `postgres`                        |
-| Database     | `todo_api`                        |
-| Volume       | `postgres_data` (persistent)      |
-| Health check | `pg_isready -U postgres` every 5s |
+| Property     | Value                                                              |
+| ------------ | ------------------------------------------------------------------ |
+| Image        | Built from `docker/timescaledb/Dockerfile` (TimescaleDB pg16 + pgBackRest) |
+| Container    | `todo-postgres`                                                    |
+| Port         | `5432`                                                             |
+| User         | `postgres`                                                         |
+| Password     | `postgres`                                                         |
+| Database     | `todo_api`                                                         |
+| Volumes      | `postgres_data` (data), `pgbackrest_data` (POSIX backup repo)      |
+| Health check | `pg_isready -U postgres` every 5s                                  |
+
+The image co-locates pgBackRest with Postgres: the entrypoint writes `pgbackrest.conf` from env vars,
+enables WAL archiving, and runs a background scheduler (daily full + 6h differential). Locally it uses a
+POSIX repo on `pgbackrest_data`; in production an S3 (Railway Bucket) repo. The same image supports
+restore via `PGBACKREST_RESTORE=1`. See [pgbackrest-implementation.md](pgbackrest-implementation.md) for
+the build and [operations.md](operations.md#database-restore-disaster-recovery) for the restore runbook.
 
 ### Redis
 

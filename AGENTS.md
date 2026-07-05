@@ -335,10 +335,11 @@ Detailed reference docs live in `docs/`. The README is a landing page with summa
 | `docs/api.md`                 | Full API endpoint reference, error codes, status codes                                          |
 | `docs/configuration.md`       | All environment variables, CORS setup, `.env` examples                                          |
 | `docs/docker.md`              | Docker build, run, production config, troubleshooting                                           |
+| `docs/operations.md`          | Deploy runbooks: DB role bootstrap, deploy preflight, failed-migration (P3009) recovery         |
 | `docs/benchmarks.md`          | Benchmark methodology, k6 scripts, load levels, reproduction                                    |
 | `docs/testing.md`             | Test framework, helpers, writing tests, CI config                                               |
 | `docs/runtime-correctness.md` | Production runtime correctness plan (shutdown, pool, error handling)                            |
-| `docs/databases.md`           | Design memo for future audit-log (TimescaleDB) and search (pg_trgm → Elasticsearch) workstreams |
+| `docs/databases.md`           | Design memo for the audit-log (TimescaleDB) and future search (pg_trgm → Elasticsearch) workstreams |
 | `ROADMAP.md`                  | Phased platform/production-readiness plan (SOC 2 priorities, open vs. done)                     |
 
 When changing API endpoints, update `docs/api.md`. When adding environment variables, update `docs/configuration.md`. When changing test infrastructure, update `docs/testing.md`. When changing benchmark infrastructure, update `docs/benchmarks.md`.

@@ -1,15 +1,25 @@
 services:
   postgres:
-    image: timescale/timescaledb:latest-pg16
+    build:
+      context: ./docker/timescaledb
+      dockerfile: Dockerfile
     container_name: todo-postgres
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: todo_api
+      # pgBackRest runs co-located in this container. Local dev uses a POSIX repo
+      # on a volume — no S3 credentials needed. See docs/pgbackrest-implementation.md.
+      PGBACKREST_STANZA: todo-api
+      PGBACKREST_REPO_TYPE: posix
+      PGBACKREST_REPO_PATH: /var/lib/pgbackrest
+      PGBACKREST_RETENTION_FULL: "2"
+      PGBACKREST_RETENTION_DIFF: "2"
     ports:
       - '5432:5432'
     volumes:
       - postgres_data:/var/lib/postgresql/data
+      - pgbackrest_data:/var/lib/pgbackrest
       # initdb only runs on a fresh volume — `docker compose down -v` if you
       # need to re-bootstrap roles on an existing dev DB.
       - ./prisma/sql/bootstrap_roles.sql:/docker-entrypoint-initdb.d/01-bootstrap_roles.sql:ro
@@ -71,3 +81,4 @@ services:
 volumes:
   postgres_data:
   redis_data:
+  pgbackrest_data:
