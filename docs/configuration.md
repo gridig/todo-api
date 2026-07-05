@@ -15,23 +15,23 @@ The application uses `envalid` to validate all environment variables at startup,
 
 ## Required Variables
 
-| Variable               | Type   | Description                                                                                                                                  | Example                                                          |
-| ---------------------- | ------ | -------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------- |
-| `DATABASE_URL`         | URL    | PostgreSQL connection string for the runtime app role (`db_app`). The audit-log REVOKE depends on this not being a superuser.                | `postgresql://db_app:db_app_dev@localhost:5432/todo_api`         |
-| `DATABASE_MIGRATE_URL` | URL    | Optional admin DSN used **only** by `prisma migrate deploy` (`db_admin` — owns the schema, runs DDL + GRANT/REVOKE). Falls back to `DATABASE_URL` if unset. | `postgresql://db_admin:db_admin_dev@localhost:5432/todo_api`     |
-| `JWT_SECRET`           | String | Secret key for JWT tokens. **Minimum 32 characters** — the server fails fast at startup if this is shorter.                                  | `your-super-secret-jwt-key-min-32-chars`                         |
+| Variable               | Type   | Description                                                                                                                                                 | Example                                                      |
+| ---------------------- | ------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------ |
+| `DATABASE_URL`         | URL    | PostgreSQL connection string for the runtime app role (`db_app`). The audit-log REVOKE depends on this not being a superuser.                               | `postgresql://db_app:db_app_dev@localhost:5432/todo_api`     |
+| `DATABASE_MIGRATE_URL` | URL    | Optional admin DSN used **only** by `prisma migrate deploy` (`db_admin` — owns the schema, runs DDL + GRANT/REVOKE). Falls back to `DATABASE_URL` if unset. | `postgresql://db_admin:db_admin_dev@localhost:5432/todo_api` |
+| `JWT_SECRET`           | String | Secret key for JWT tokens. **Minimum 32 characters** — the server fails fast at startup if this is shorter.                                                 | `your-super-secret-jwt-key-min-32-chars`                     |
 
 ### Database roles
 
 Audit-log immutability requires three Postgres roles so SOC 2 tamper-evidence (CC7.2 / CC7.4) is enforced at the DB layer, not just the app:
 
-| Role         | Connect via                | What it can do                                                                                                                                |
-| ------------ | -------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
-| `db_admin`   | `DATABASE_MIGRATE_URL`     | Owns the `public` schema; CREATE/ALTER/DROP and GRANT/REVOKE. Used only by `prisma migrate deploy`.                                           |
-| `db_app`     | `DATABASE_URL`             | Runtime CRUD on app tables; `INSERT` + `SELECT` on `audit_entries` (UPDATE/DELETE/TRUNCATE are REVOKED so an app-layer compromise can't tamper). |
-| `db_auditor` | external auditor sessions  | `SELECT` on `audit_entries` only.                                                                                                              |
+| Role         | Connect via               | What it can do                                                                                                                                   |
+| ------------ | ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `db_admin`   | `DATABASE_MIGRATE_URL`    | Owns the `public` schema; CREATE/ALTER/DROP and GRANT/REVOKE. Used only by `prisma migrate deploy`.                                              |
+| `db_app`     | `DATABASE_URL`            | Runtime CRUD on app tables; `INSERT` + `SELECT` on `audit_entries` (UPDATE/DELETE/TRUNCATE are REVOKED so an app-layer compromise can't tamper). |
+| `db_auditor` | external auditor sessions | `SELECT` on `audit_entries` only.                                                                                                                |
 
-Roles are created by `prisma/sql/bootstrap_roles.sql`. The Docker Compose Postgres service mounts this file into `/docker-entrypoint-initdb.d/`, so a fresh `docker compose up` provisions everything. CI runs the same file via `psql`. Production (Railway) is bootstrapped once with [`prisma/sql/bootstrap_roles_prod.sql`](../prisma/sql/bootstrap_roles_prod.sql) — run as a superuser before the first `prisma migrate deploy` (it takes the role passwords as `psql -v` variables and is idempotent / safe to re-run). A deploy preflight check ([`scripts/preflight-roles.ts`](../scripts/preflight-roles.ts)) runs as part of the Railway pre-deploy command (`railway.json`) and fails the deploy fast with a clear message if the roles are missing, rather than letting the migration crash-loop. See [operations.md](operations.md).
+Roles are created by `prisma/sql/bootstrap_roles.sql`. The Docker Compose Postgres service mounts this file into `/docker-entrypoint-initdb.d/`, so a fresh `docker compose up` provisions everything. CI runs the same file via `psql`. Production (Railway) is bootstrapped once with [`prisma/sql/bootstrap_roles_prod.sql`](../prisma/sql/bootstrap_roles_prod.sql) — run as a superuser before the first `prisma migrate deploy` (it takes the role passwords as `psql -v` variables and is idempotent / safe to re-run). A deploy preflight check ([`scripts/preflight-roles.ts`](../scripts/preflight-roles.ts)) runs as part of the Railway pre-deploy command (`railway.json`) and fails the deploy fast with a clear message if the roles are missing, rather than letting the migration crash-loop; transient connection failures are retried with the same `DB_CONNECT_MAX_RETRIES` / `DB_CONNECT_INITIAL_DELAY_MS` / `DB_CONNECTION_TIMEOUT_MS` knobs as the app's startup retry (read leniently, no envalid). See [operations.md](operations.md).
 
 Generate a secure JWT secret for production:
 
@@ -46,28 +46,28 @@ These variables configure pgBackRest, which runs **co-located in the `timescaled
 service. Locally, `docker-compose.yml` sets a POSIX repo so no S3 credentials are needed. Design and
 build details: [pgbackrest-implementation.md](pgbackrest-implementation.md).
 
-| Variable | Default | Description |
-| -------- | ------- | ----------- |
-| `PGBACKREST_REPO_TYPE` | `s3` | `s3` (prod) or `posix` (local) |
-| `PGBACKREST_REPO_S3_ENDPOINT` | _(required for s3)_ | Railway Bucket S3 endpoint URL |
-| `PGBACKREST_REPO_S3_BUCKET` | _(required for s3)_ | Bucket name |
-| `PGBACKREST_REPO_S3_KEY` | _(required for s3)_ | Access key ID |
-| `PGBACKREST_REPO_S3_KEY_SECRET` | _(required for s3)_ | Secret access key |
-| `PGBACKREST_REPO_S3_REGION` | `auto` | S3 region |
-| `PGBACKREST_REPO_PATH` | `/var/lib/pgbackrest` | POSIX repo path (local only) |
-| `PGBACKREST_CIPHER_PASS` | _(required)_ | AES-256 passphrase (32+ chars) |
-| `PGBACKREST_STANZA` | `todo-api` | Stanza name |
-| `PGBACKREST_PG1_USER` | `$POSTGRES_USER` or `postgres` | DB role pgBackRest connects as (cluster superuser); lets root-invoked ops commands work |
-| `PGBACKREST_RETENTION_FULL` | `35` | Daily full backups to retain (≈ PITR window in days) |
-| `PGBACKREST_RETENTION_DIFF` | `14` | Differentials to retain |
-| `PGBACKREST_RETENTION_ARCHIVE` | `35` | Fulls' worth of WAL to retain |
-| `PGBACKREST_PROCESS_MAX` | `2` | Parallel processes for backup/restore |
-| `PGBACKREST_FULL_HOUR_UTC` | `2` | UTC hour for the daily full window |
-| `PGBACKREST_FULL_MAX_AGE_SEC` | `93600` | Hard catch-up ceiling for the daily full (26h) — runs regardless of window once the last full is this old; keep below the 30h full-age alert |
-| `PGBACKREST_DIFF_INTERVAL_SEC` | `21600` | Differential interval (seconds) |
-| `PGBACKREST_LOOP_SLEEP_SEC` | `60` | Scheduler check interval (seconds) |
-| `PGBACKREST_RESTORE` | `0` | `1` = restore into PGDATA before Postgres starts (DR only — see [operations.md](operations.md)) |
-| `PGBACKREST_RESTORE_ARGS` | _(empty)_ | Extra restore flags, e.g. `--type=time --target=...`, `--delta` |
+| Variable                        | Default                        | Description                                                                                                                                  |
+| ------------------------------- | ------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| `PGBACKREST_REPO_TYPE`          | `s3`                           | `s3` (prod) or `posix` (local)                                                                                                               |
+| `PGBACKREST_REPO_S3_ENDPOINT`   | _(required for s3)_            | Railway Bucket S3 endpoint URL                                                                                                               |
+| `PGBACKREST_REPO_S3_BUCKET`     | _(required for s3)_            | Bucket name                                                                                                                                  |
+| `PGBACKREST_REPO_S3_KEY`        | _(required for s3)_            | Access key ID                                                                                                                                |
+| `PGBACKREST_REPO_S3_KEY_SECRET` | _(required for s3)_            | Secret access key                                                                                                                            |
+| `PGBACKREST_REPO_S3_REGION`     | `auto`                         | S3 region                                                                                                                                    |
+| `PGBACKREST_REPO_PATH`          | `/var/lib/pgbackrest`          | POSIX repo path (local only)                                                                                                                 |
+| `PGBACKREST_CIPHER_PASS`        | _(required)_                   | AES-256 passphrase (32+ chars)                                                                                                               |
+| `PGBACKREST_STANZA`             | `todo-api`                     | Stanza name                                                                                                                                  |
+| `PGBACKREST_PG1_USER`           | `$POSTGRES_USER` or `postgres` | DB role pgBackRest connects as (cluster superuser); lets root-invoked ops commands work                                                      |
+| `PGBACKREST_RETENTION_FULL`     | `35`                           | Daily full backups to retain (≈ PITR window in days)                                                                                         |
+| `PGBACKREST_RETENTION_DIFF`     | `14`                           | Differentials to retain                                                                                                                      |
+| `PGBACKREST_RETENTION_ARCHIVE`  | `35`                           | Fulls' worth of WAL to retain                                                                                                                |
+| `PGBACKREST_PROCESS_MAX`        | `2`                            | Parallel processes for backup/restore                                                                                                        |
+| `PGBACKREST_FULL_HOUR_UTC`      | `2`                            | UTC hour for the daily full window                                                                                                           |
+| `PGBACKREST_FULL_MAX_AGE_SEC`   | `93600`                        | Hard catch-up ceiling for the daily full (26h) — runs regardless of window once the last full is this old; keep below the 30h full-age alert |
+| `PGBACKREST_DIFF_INTERVAL_SEC`  | `21600`                        | Differential interval (seconds)                                                                                                              |
+| `PGBACKREST_LOOP_SLEEP_SEC`     | `60`                           | Scheduler check interval (seconds)                                                                                                           |
+| `PGBACKREST_RESTORE`            | `0`                            | `1` = restore into PGDATA before Postgres starts (DR only — see [operations.md](operations.md))                                              |
+| `PGBACKREST_RESTORE_ARGS`       | _(empty)_                      | Extra restore flags, e.g. `--type=time --target=...`, `--delta`                                                                              |
 
 ## Optional Variables
 
@@ -108,7 +108,7 @@ Pool sizing rule: `DB_POOL_MAX × replica_count × CLUSTER_WORKERS` must stay we
 
 #### Startup connection retry
 
-The initial `prisma.$connect()` at boot is retried with **decorrelated jitter** (AWS SDK style): `delay_n = random(base, min(30s, delay_{n-1} * 3))`. This survives a transient database blip during container startup (network jitter, brief DB maintenance, replica failover) without crashing the process into a `CrashLoopBackOff` against the same root cause. After `DB_CONNECT_MAX_RETRIES + 1` total attempts the last error is re-thrown, the fatal handler logs it, and the orchestrator can take it from there. Set `DB_CONNECT_MAX_RETRIES=0` to skip retry and fail fast — useful in CI where a missing database should be loud.
+The initial `prisma.$connect()` at boot is retried with **decorrelated jitter** (AWS SDK style): `delay_n = random(base, min(30s, delay_{n-1} * 3))`. This survives a transient database blip during container startup (network jitter, brief DB maintenance, replica failover) without crashing the process into a `CrashLoopBackOff` against the same root cause. After `DB_CONNECT_MAX_RETRIES + 1` total attempts the last error is re-thrown, the fatal handler logs it, and the orchestrator can take it from there. Set `DB_CONNECT_MAX_RETRIES=0` to skip retry and fail fast — useful in CI where a missing database should be loud. The deploy preflight (`scripts/preflight-roles.ts`) reads the same three knobs directly from env (leniently — unparseable values fall back to the defaults) with its jitter capped at 15 s instead of 30 s.
 
 #### Sizing recommendations
 
