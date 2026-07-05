@@ -5,7 +5,7 @@
 # `FROM node:24-slim@sha256:<digest>` form (one digest, both stages — cache reuse).
 # Dependabot's `docker` ecosystem tracks digest pins.
 # Pinned to Node 24: Prisma 7.x supports 20.19+/22.12+/24.0+ (not 26); see AGENTS.md.
-FROM node:24-slim AS build
+FROM node:26-slim AS build
 
 WORKDIR /app
 
@@ -27,7 +27,7 @@ COPY scripts ./scripts
 RUN npx tsc
 
 
-FROM node:24-slim
+FROM node:26-slim
 
 WORKDIR /app
 
