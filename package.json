@@ -10,7 +10,10 @@
       "bcrypt",
       "esbuild",
       "prisma"
-    ]
+    ],
+    "overrides": {
+      "hono": "^4.12.25"
+    }
   },
   "scripts": {
     "bench:seed": "tsx benchmarks/seed.ts",
