@@ -44,6 +44,16 @@ via `DATABASE_MIGRATE_URL` (falling back to `DATABASE_URL`) and exits non-zero i
 keeps the previous version serving, a missing role or broken migration produces one legible failure
 instead of crash-looping the app.
 
+Transient connection/query failures are retried with decorrelated-jitter backoff — Railway's
+`*.railway.internal` private networking can take a few seconds to come up in a fresh pre-deploy
+container (the 2026-07-05 deploy failure), so a single early attempt can time out spuriously. Each
+failed attempt is logged with its number and next delay. The knobs are the same as the app's startup
+retry, read leniently from plain env (fallback on missing/unparseable values, no envalid):
+`DB_CONNECT_MAX_RETRIES` (default 5), `DB_CONNECT_INITIAL_DELAY_MS` (default 1000),
+`DB_CONNECTION_TIMEOUT_MS` (default 5000), with the jitter capped at 15 s — worst case ≈ 73 s with
+defaults. The deterministic outcomes — missing DSN, missing roles — still fail immediately without
+retrying.
+
 ## Recovering a failed migration (Prisma P3009)
 
 When a migration fails partway, Prisma records it as failed and **every subsequent deploy aborts with
@@ -71,6 +81,7 @@ was recovered as follows. Run against the prod DB as a superuser (via the public
 
    Use `--rolled-back` only after the partial objects are gone (else the rerun hits "already exists").
    If you instead completed the changes by hand, use `--applied` and Prisma won't re-run the SQL.
+
 6. **Repoint + redeploy:** set `DATABASE_URL`→`db_app`, `DATABASE_MIGRATE_URL`→`db_admin`, re-enable
    deploys. The app boots as `db_app`; confirm the logs show `Audit-log tamper-evidence probe passed`
    and `Server started successfully`, and `/health/ready` returns 200.
@@ -89,10 +100,10 @@ taking scheduled base backups to a Railway Bucket. Design and build details are 
 
 ### Recovery targets
 
-| Metric | Target | Bounded by |
-| ------ | ------ | ---------- |
-| RPO | ≤ 5 minutes | `archive_timeout = 60s` + WAL push latency |
-| RTO | ≤ 30 minutes | Provision + restore + WAL replay + app repoint |
+| Metric | Target       | Bounded by                                     |
+| ------ | ------------ | ---------------------------------------------- |
+| RPO    | ≤ 5 minutes  | `archive_timeout = 60s` + WAL push latency     |
+| RTO    | ≤ 30 minutes | Provision + restore + WAL replay + app repoint |
 
 > pgBackRest takes **physical** backups of the whole cluster — `pg_authid` (roles + passwords), all
 > databases, and the `REVOKE`-based audit immutability are included. A restore does **not** need role
@@ -114,13 +125,13 @@ taking scheduled base backups to a Railway Bucket. Design and build details are 
    not re-restore on its next restart.
 6. **Repoint the app** — point `DATABASE_URL` / `DATABASE_MIGRATE_URL` at the restored service and
    redeploy `todo-api`. Confirm startup logs: `preflight-roles: OK`, `Audit-log tamper-evidence probe
-   passed`, `Server started successfully`, and `/health/ready` → 200.
+passed`, `Server started successfully`, and `/health/ready` → 200.
 
 ### Scenario B: point-in-time recovery (bad migration / data corruption)
 
 Same as Scenario A, but in step 3 also set
 `PGBACKREST_RESTORE_ARGS=--type=time --target="2026-06-01 12:00:00+00"`. Add `--target-exclusive` to
-stop *before* the bad event; use `--delta` instead of an empty volume to restore in place over existing
+stop _before_ the bad event; use `--delta` instead of an empty volume to restore in place over existing
 data.
 
 ### Quarterly restore drill (SOC 2 A1.3)
