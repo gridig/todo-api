@@ -136,7 +136,7 @@ mkdir -p /etc/pgbackrest /var/log/pgbackrest "${PGBACKREST_REPO_PATH:-/var/lib/p
   echo "pg1-port=${PG_PORT:-5432}"
   echo "pg1-socket-path=${PG_SOCKET_PATH:-/var/run/postgresql}"
   # Connect as the cluster superuser, not the invoking OS user — so ops commands
-  # run via docker/railway exec (as root) don't try a DB role named "root".
+  # run via docker/`railway ssh` (as root) don't try a DB role named "root".
   echo "pg1-user=${PGBACKREST_PG1_USER:-${POSTGRES_USER:-postgres}}"
 } > "$CONF"
 
@@ -146,10 +146,13 @@ chown -R postgres:postgres /etc/pgbackrest /var/log/pgbackrest "${PGBACKREST_REP
 # Restore mode: populate an (empty/--delta) PGDATA from the repo BEFORE Postgres starts.
 # The stock entrypoint then sees populated data, skips initdb, starts Postgres, and
 # Postgres replays WAL to the target using the recovery settings pgBackRest wrote.
-if [[ "${PGBACKREST_RESTORE:-0}" == "1" ]]; then
+# DO_RESTORE/RESTORE_ARGS are read from PGBACKREST_RESTORE[_ARGS] and unset earlier in the
+# entrypoint — pgBackRest reads any PGBACKREST_* var as a config option, so leaving them set
+# makes every archive-get log "WARN: environment contains invalid option 'restore'".
+if [[ "$DO_RESTORE" == "1" ]]; then
   echo "=== RESTORE MODE: restoring '${STANZA}' into ${PG_PATH} ==="
   # shellcheck disable=SC2086
-  su-exec postgres pgbackrest --stanza="${STANZA}" ${PGBACKREST_RESTORE_ARGS:-} restore
+  su-exec postgres pgbackrest --stanza="${STANZA}" ${RESTORE_ARGS} restore
   echo "Restore staged. Postgres will start and replay WAL."
 fi
 
@@ -350,7 +353,7 @@ set -euo pipefail
 
 # pgBackRest must run as the cluster owner (postgres), not root: it connects as
 # the invoking OS user and writes repo files the postgres-owned scheduler manages.
-# Re-exec under postgres when started as root (the docker/railway exec default).
+# Re-exec under postgres when started as root (the docker/`railway ssh` default).
 if [ "$(id -u)" -eq 0 ]; then exec su-exec postgres "$0" "$@"; fi
 
 STANZA="${PGBACKREST_STANZA:-todo-api}"
@@ -377,7 +380,7 @@ pgbackrest --stanza="$STANZA" info 2>&1 || true
 
 **Usage** (runs inside the DB service, where the binary, config, and socket live):
 ```bash
-railway exec --service timescaledb -- backup-bootstrap.sh
+railway ssh --service timescaledb "backup-bootstrap.sh"
 ```
 
 ---
@@ -442,7 +445,9 @@ to restore in place over existing data.
 
 The scheduler writes `/tmp/pgbackrest-metrics.prom` every loop. There is **no** HTTP listener for it yet — do not expose a port that nothing serves.
 
-**Now (pre-Prometheus):** configure a Railway notification (Slack/email) on the timescaledb service that triggers on repeated `ERROR:` log lines. The scheduler logs `ERROR: Full backup FAILED!` / `ERROR: Differential backup FAILED!` on failure.
+**Now:** there is **no interim alert**. Railway has no native log-content alerting — its webhooks fire on *deploy* state, and a backup failure does not change deploy state (the container keeps running), so a deploy webhook never sees it. The scheduler still logs `ERROR: Full backup FAILED!` / `ERROR: Differential backup FAILED!`, but nothing is wired to notify on those lines. Backup-failure alerting is delivered by the Prometheus rules in the **Later** table below, tracked under the **Monitoring & Observability** roadmap item.
+
+If pre-Prometheus alerting is ever needed before that lands, the two viable paths (neither implemented) are: a Railway **log drain** forwarding this service's logs to an external service (e.g. Better Stack) that alerts on the `ERROR:` pattern, or a webhook `POST` added to `backup-scheduler.sh`'s failure branch (gated on an alert-URL env var).
 
 **Later (Monitoring & Observability roadmap item):** expose the metrics file via a node_exporter
 `--collector.textfile.directory` mount or a tiny HTTP exporter, then add:
@@ -517,8 +522,8 @@ Validate the single image builds (config validation happens at `stanza-create` r
 
 ### Order
 1. Deploy the new **timescaledb** image with `PGBACKREST_*` env set.
-2. Run the bootstrap: `railway exec --service timescaledb -- backup-bootstrap.sh`.
-3. Confirm archiving: `railway exec --service timescaledb -- pgbackrest --stanza=todo-api check`.
+2. Run the bootstrap: `railway ssh --service timescaledb "backup-bootstrap.sh"`.
+3. Confirm archiving: `railway ssh --service timescaledb "pgbackrest --stanza=todo-api check"`.
 
 ### Pre-deploy checklist
 - [ ] Railway Bucket provisioned; credentials valid
