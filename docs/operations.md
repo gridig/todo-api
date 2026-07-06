@@ -117,10 +117,10 @@ taking scheduled base backups to a Railway Bucket. Design and build details are 
    volume and the same `PGBACKREST_*` env (same bucket, keys, cipher pass, stanza).
 3. **Set restore env** on that service and deploy: `PGBACKREST_RESTORE=1`. The entrypoint restores into
    the empty `PGDATA` before Postgres starts; Postgres then replays WAL to the latest point and promotes.
-4. **Verify** (inside the service):
+4. **Verify** (inside the service via `railway ssh --service <svc> "..."`):
    - `psql -c '\du'` — `db_admin`, `db_app`, `db_auditor` present
    - `psql -c '\dt'` — `users`, `todos`, `audit_entries`, `_prisma_migrations` present
-   - Immutability: `SET ROLE db_app; UPDATE audit_entries SET action='x' WHERE false;` → must fail `42501`
+   - Immutability: `psql -c "SET ROLE db_app; UPDATE audit_entries SET action='x' WHERE false;"` → must fail `42501`
 5. **Clear restore env** — set `PGBACKREST_RESTORE=0` (or remove it) and redeploy, so the service does
    not re-restore on its next restart.
 6. **Repoint the app** — point `DATABASE_URL` / `DATABASE_MIGRATE_URL` at the restored service and
@@ -136,7 +136,67 @@ data.
 
 ### Quarterly restore drill (SOC 2 A1.3)
 
-1. Provision a **throwaway** timescaledb service; restore the latest backup (Scenario A, steps 2–4).
-2. Point a scratch `todo-api` at it; run `pnpm test:integration`.
-3. Document: date, backup ID (`pgbackrest --stanza=todo-api info`), wall-clock restore time, pass/fail counts.
-4. Tear down. File the report as SOC 2 A1.3 evidence.
+Restores real production backups into a throwaway service, proves the data + audit
+immutability came back, and files an evidence report. Copy
+[restore-drill-report-template.md](restore-drill-report-template.md) and fill it as you go.
+
+**Repo isolation (important).** The drill service runs the same entrypoint as prod — it starts
+`backup-scheduler.sh` and enables `archive_mode=on`, so pointed at the **production** repo it could
+push WAL / take backups into it and, after promotion, fork a new timeline. The clean isolation is a
+**separate scratch bucket holding a copy of the repo**: the drill reads and writes only the copy and
+physically cannot touch prod. (Read-only credentials would also isolate it in principle, but **Railway
+Buckets issue only one full-access key pair — there are no read-only scoped keys** — so the copy is the
+practical path.)
+
+1. **Record the target.** `railway ssh --service timescaledb "pgbackrest --stanza=todo-api info"` —
+   note the latest full backup ID (e.g. `20260706-020047F`) and the current `wal archive max` (pins the
+   restore point + lets you compute achieved RPO). Also grab the prod repo's S3 keys/endpoint/bucket:
+   `railway variables --service timescaledb --json | jq -r '.PGBACKREST_REPO_S3_KEY, .PGBACKREST_REPO_S3_KEY_SECRET, .PGBACKREST_REPO_S3_ENDPOINT, .PGBACKREST_REPO_S3_BUCKET'`
+   (use `--json`/`jq` or `--kv`, not the plain table — it truncates long secrets).
+2. **Copy the repo to a scratch bucket.** Provision a second Railway Bucket (e.g. `todo-api-drill`);
+   note its keys/bucket name. Then copy the prod repo across with two `rclone` S3 remotes (same
+   endpoint):
+   ```bash
+   rclone config create prodbkt  s3 provider Other endpoint <ENDPOINT> region auto \
+     access_key_id "<PROD_KEY>"  secret_access_key "<PROD_SECRET>"
+   rclone config create drillbkt s3 provider Other endpoint <ENDPOINT> region auto \
+     access_key_id "<DRILL_KEY>" secret_access_key "<DRILL_SECRET>"
+   rclone sync prodbkt:<prod-bucket> drillbkt:<drill-bucket> --progress
+   rclone ls drillbkt:<drill-bucket> | head   # expect backup/todo-api/... + archive/todo-api/...
+   ```
+   The repo is encrypted — `rclone sync` copies the **ciphertext byte-for-byte**, so the drill must use
+   the **same `PGBACKREST_CIPHER_PASS`**. Do not re-encrypt or change the cipher pass.
+3. **Provision a throwaway `timescaledb-drill` service** (staging environment or a scratch project)
+   from `docker/timescaledb/Dockerfile`, empty volume, pointed at the **scratch** bucket:
+   - `PGBACKREST_*` repo config for the **scratch** bucket (its endpoint, region, name, keys) + the
+     **same** `PGBACKREST_CIPHER_PASS` and `PGBACKREST_STANZA=todo-api` as prod;
+   - `PGBACKREST_RESTORE=1`;
+   - `PGBACKREST_PG1_USER=railway` — the restored cluster's superuser (Railway-origin clusters have
+     `railway`, not `postgres`); without it the post-restore scheduler logs harmless but noisy
+     `role "postgres" does not exist` on its backup attempts;
+   - Stamp the start time (`date -u`) — the RTO clock starts at the deploy trigger.
+   Build with `railway up docker/timescaledb --path-as-root --ci --service timescaledb-drill`
+   (`--path-as-root` is load-bearing — else it builds the app's root Dockerfile onto the service).
+4. **Deploy and watch logs:** expect `=== RESTORE MODE: restoring 'todo-api' ...`, then Postgres start
+   + WAL replay (`restored log file ...`), then `database system is ready to accept connections`
+   (the image is `PostgreSQL 16` — if you see `PostgreSQL 18` / `wrapper:` lines it's Railway's managed
+   image, not ours).
+5. **Verify data + immutability** (via `railway ssh --service timescaledb-drill "psql -U railway -d railway -c '...'"`):
+   - `\du` — `db_admin`, `db_app`, `db_auditor` present (roles restored physically).
+   - `\dt` — `users`, `todos`, `audit_entries`, `_prisma_migrations` present.
+   - Row sanity: `SELECT count(*) FROM users; SELECT count(*) FROM todos; SELECT count(*), max(changed_at) FROM audit_entries;`
+     — compare against prod (note: `audit_entries`' time column is `changed_at`, not `createdAt`); the
+     newest audit row bounds achieved RPO.
+   - Immutability probe: `SET ROLE db_app; UPDATE audit_entries SET action='x' WHERE false;`
+     → **must** fail `42501` (`permission denied for table audit_entries`).
+   - `pgbackrest --stanza=todo-api info` shows the backup set used.
+6. **App-level check.** Point a scratch `todo-api` at the drill DB (`DATABASE_URL` /
+   `DATABASE_MIGRATE_URL`), deploy, confirm startup logs (`preflight-roles: OK`,
+   `Audit-log tamper-evidence probe passed`, `/health/ready → 200`), then run
+   `pnpm test:integration` against it → green.
+7. **Stop the RTO clock** at the first `/health/ready → 200`. Wall-clock = step-3 trigger → here.
+   Compare to the RTO ≤ 30 min target.
+8. **Tear down** the scratch `todo-api`, the `timescaledb-drill` service + volume, **and the scratch
+   bucket**.
+9. **File evidence** — complete the report template and commit it as
+   `docs/evidence/restore-drill-YYYY-MM-DD.md`.
