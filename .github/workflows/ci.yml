@@ -17,7 +17,7 @@ jobs:
     name: Lint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: pnpm/action-setup@v6
       - uses: actions/setup-node@v6
         with:
@@ -34,7 +34,7 @@ jobs:
       # only parses the URL, never connects. Stub value is sufficient.
       DATABASE_URL: postgresql://build:build@localhost:5432/build
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: pnpm/action-setup@v6
       - uses: actions/setup-node@v6
         with:
@@ -50,7 +50,7 @@ jobs:
     env:
       DATABASE_URL: postgresql://build:build@localhost:5432/build
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: pnpm/action-setup@v6
       - uses: actions/setup-node@v6
         with:
@@ -87,7 +87,7 @@ jobs:
       DATABASE_MIGRATE_URL: postgresql://db_admin:db_admin_dev@localhost:5432/todo_api
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: pnpm/action-setup@v6
       - uses: actions/setup-node@v6
         with:
@@ -110,7 +110,7 @@ jobs:
     name: Dependency audit
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: pnpm/action-setup@v6
       - uses: actions/setup-node@v6
         with:
@@ -126,7 +126,7 @@ jobs:
     name: Docker images
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       # Validates the TimescaleDB + pgBackRest image builds (apk pgbackrest resolves,
       # scripts copy). Config is validated at stanza-create runtime, not build time.
       - name: Build TimescaleDB + pgBackRest image
