@@ -10,6 +10,14 @@ STANZA="${PGBACKREST_STANZA:-todo-api}"
 REPO_TYPE="${PGBACKREST_REPO_TYPE:-s3}"
 PG_PATH="${PGDATA:-/var/lib/postgresql/data}"
 
+# Read the restore gate into locals, then unset the PGBACKREST_-prefixed vars. pgBackRest
+# reads any PGBACKREST_* env var as a config option, so leaving PGBACKREST_RESTORE set makes
+# every archive-get/backup log "WARN: environment contains invalid option 'restore'". Unsetting
+# here (before any pgbackrest invocation) silences that while keeping the documented interface.
+DO_RESTORE="${PGBACKREST_RESTORE:-0}"
+RESTORE_ARGS="${PGBACKREST_RESTORE_ARGS:-}"
+unset PGBACKREST_RESTORE PGBACKREST_RESTORE_ARGS
+
 # A backup misconfiguration must NEVER stop the database from starting. If the repo
 # isn't fully configured, boot Postgres without archiving and log loudly instead of
 # crash-looping the container.
@@ -70,10 +78,10 @@ chown -R postgres:postgres /etc/pgbackrest /var/log/pgbackrest "${PGBACKREST_REP
 # Restore mode: populate an (empty/--delta) PGDATA from the repo BEFORE Postgres starts.
 # The stock entrypoint then sees populated data, skips initdb, starts Postgres, and
 # Postgres replays WAL to the target using the recovery settings pgBackRest wrote.
-if [[ "${PGBACKREST_RESTORE:-0}" == "1" ]]; then
+if [[ "$DO_RESTORE" == "1" ]]; then
   echo "=== RESTORE MODE: restoring '${STANZA}' into ${PG_PATH} ==="
   # shellcheck disable=SC2086
-  su-exec postgres pgbackrest --stanza="${STANZA}" ${PGBACKREST_RESTORE_ARGS:-} restore
+  su-exec postgres pgbackrest --stanza="${STANZA}" ${RESTORE_ARGS} restore
   echo "Restore staged. Postgres will start and replay WAL."
 fi
 
