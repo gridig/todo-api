@@ -47,7 +47,7 @@
     "bcrypt": "6.0.0",
     "cors": "2.8.6",
     "dotenv": "17.4.2",
-    "envalid": "8.1.1",
+    "envalid": "8.2.0",
     "express": "5.2.1",
     "express-rate-limit": "8.5.2",
     "helmet": "^8.1.0",
