@@ -60,10 +60,14 @@ describe('CORS Integration', () => {
       expect(response.headers['access-control-allow-origin']).toBe('http://localhost:3000');
     });
 
-    it('should reject requests from disallowed origins', async () => {
+    it('should reject requests from disallowed origins with 403, not 500', async () => {
       const response = await request(app).get('/health').set('Origin', 'http://malicious-site.com');
 
       expect(response.headers['access-control-allow-origin']).toBeUndefined();
+      expect(response.status).toBe(403);
+      expect(response.body.error.code).toBe('CORS_ORIGIN_DENIED');
+      // The attacker-controlled origin must not be echoed back.
+      expect(JSON.stringify(response.body)).not.toContain('malicious-site.com');
     });
 
     it('should allow requests with no origin (mobile apps, Postman)', async () => {

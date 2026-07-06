@@ -1,11 +1,8 @@
-# Reproducibility: pin both stages to a sha256 digest. Resolve the current
-# digest with:  docker pull node:24-slim && \
-#               docker inspect --format='{{index .RepoDigests 0}}' node:24-slim
-# Then replace both `FROM node:24-slim` lines below with the same
-# `FROM node:24-slim@sha256:<digest>` form (one digest, both stages — cache reuse).
-# Dependabot's `docker` ecosystem tracks digest pins.
+# Reproducibility: both stages pinned to the same sha256 digest (one digest,
+# both stages — cache reuse). Dependabot's `docker` ecosystem tracks the pin;
+# bumps stay manual per AGENTS.md.
 # Pinned to Node 24: Prisma 7.x supports 20.19+/22.12+/24.0+ (not 26); see AGENTS.md.
-FROM node:24-slim AS build
+FROM node:24-slim@sha256:b31e7a42fdf8b8aa5f5ed477c72d694301273f1069c5a2f71d53c6482e99a2fc AS build
 
 WORKDIR /app
 
@@ -23,11 +20,12 @@ COPY src ./src
 # scripts/ holds preflight-roles.ts, compiled to dist/scripts/preflight-roles.js
 # and invoked by railway.json's preDeployCommand. Must be present before tsc.
 COPY scripts ./scripts
+COPY tsconfig.build.json ./
 
-RUN npx tsc
+RUN npx tsc -p tsconfig.build.json
 
 
-FROM node:24-slim
+FROM node:24-slim@sha256:b31e7a42fdf8b8aa5f5ed477c72d694301273f1069c5a2f71d53c6482e99a2fc
 
 WORKDIR /app
 

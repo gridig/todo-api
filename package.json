@@ -1,7 +1,6 @@
 {
   "name": "todo-api",
   "version": "1.0.0",
-  "main": "index.js",
   "type": "module",
   "packageManager": "pnpm@9.15.4",
   "pnpm": {
@@ -10,10 +9,7 @@
       "bcrypt",
       "esbuild",
       "prisma"
-    ],
-    "overrides": {
-      "hono": "^4.12.25"
-    }
+    ]
   },
   "scripts": {
     "bench:seed": "tsx benchmarks/seed.ts",
@@ -23,20 +19,19 @@
     "bench:cold-start": "k6 run benchmarks/k6/cold-start.js",
     "bench:explain": "tsx benchmarks/explain-queries.ts",
     "bench:bcrypt": "tsx benchmarks/bcrypt-timing.ts",
-    "build": "tsc",
-    "build:watch": "tsc --watch",
+    "build": "tsc -p tsconfig.build.json",
+    "build:watch": "tsc -p tsconfig.build.json --watch",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "prebuild": "rm -rf dist",
     "dev": "tsx watch src/index.ts",
-    "lint": "eslint . --ext .ts,.js",
-    "lint:fix": "eslint . --ext .ts,.js --fix",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
     "start": "node dist/src/index.js",
     "start:prod": "NODE_ENV=production node dist/src/index.js",
     "test": "NODE_OPTIONS=--experimental-vm-modules jest",
     "test:watch": "NODE_OPTIONS=--experimental-vm-modules jest --watch",
     "test:coverage": "NODE_OPTIONS=--experimental-vm-modules jest --coverage",
-    "test:server": "NODE_OPTIONS=--experimental-vm-modules jest index.test.js",
     "test:integration": "NODE_OPTIONS=--experimental-vm-modules jest __tests__/integration/",
     "test:unit": "NODE_OPTIONS=--experimental-vm-modules jest __tests__/unit/",
     "test:ci": "NODE_OPTIONS=--experimental-vm-modules jest --ci --coverage",
@@ -65,8 +60,7 @@
     "prom-client": "15.1.3",
     "rate-limit-redis": "^5.0.0",
     "redis": "^6.0.0",
-    "uuid": "14.0.0",
-    "validator": "13.15.35"
+    "uuid": "14.0.0"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",
@@ -85,7 +79,6 @@
     "eslint-config-prettier": "^10.1.8",
     "globals": "17.6.0",
     "jest": "30.4.2",
-    "nodemon": "3.1.14",
     "prettier": "^3.8.3",
     "supertest": "7.2.2",
     "ts-jest": "29.4.11",

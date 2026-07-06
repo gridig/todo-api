@@ -37,6 +37,16 @@ export const rateLimitHitsTotal = new Counter({
   registers: [register],
 });
 
+// Requests served by the per-instance memory fallback because Redis was
+// unavailable. Alert on a sustained non-zero rate — caps are degraded from
+// global to per-instance while this climbs.
+export const rateLimitStoreFallbackTotal = new Counter({
+  name: 'rate_limit_store_fallback_total',
+  help: 'Rate-limit checks served by the in-memory fallback store (Redis unavailable)',
+  labelNames: ['limiter_type'] as const,
+  registers: [register],
+});
+
 export const dbQueryDuration = new Histogram({
   name: 'db_query_duration_seconds',
   help: 'Duration of database queries in seconds',

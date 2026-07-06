@@ -23,7 +23,8 @@ lf=$(last_stop full); ld=$(last_stop diff)
 count=$(info_json | jq '[.[].backup[]?] | length' 2>/dev/null || echo 0)
 pgbackrest --stanza="$STANZA" check >/dev/null 2>&1 && wal_ok=1
 
-cat > "$METRICS_FILE" <<EOF
+# tmp + rename: a scrape must never read a half-written file.
+cat > "${METRICS_FILE}.tmp.$$" <<EOF
 # HELP pgbackrest_last_full_backup_age_seconds Seconds since last successful full backup
 # TYPE pgbackrest_last_full_backup_age_seconds gauge
 pgbackrest_last_full_backup_age_seconds ${full_age}
@@ -43,5 +44,6 @@ pgbackrest_full_alert_threshold_seconds ${FULL_ALERT_THRESHOLD}
 # TYPE pgbackrest_diff_alert_threshold_seconds gauge
 pgbackrest_diff_alert_threshold_seconds ${DIFF_ALERT_THRESHOLD}
 EOF
+mv -f "${METRICS_FILE}.tmp.$$" "$METRICS_FILE"
 
 echo "Metrics written to ${METRICS_FILE}"

@@ -8,15 +8,15 @@ A production-ready RESTful API for managing todos with user authentication.
 
 **Stack:**
 
-- TypeScript 5.9.3 (strict mode, ES Modules)
+- TypeScript 6.0.3 (strict mode, ES Modules)
 - Node.js 24+ with Express 5.2.1
 - PostgreSQL with Prisma ORM 7.x
 - JWT authentication (jsonwebtoken 9.0.3)
-- Bcrypt password hashing (6.0.0, 10 salt rounds)
-- Joi validation (18.0.2)
-- Pino structured logging (10.1.0)
-- Express-rate-limit (8.2.1)
-- Testing: Jest 29.7.0, ts-jest, Supertest
+- Bcrypt password hashing (6.0.0, 12 salt rounds)
+- Joi validation (18.x)
+- Pino structured logging (10.x)
+- Express-rate-limit (8.5.2)
+- Testing: Jest 30.4.2, ts-jest, Supertest
 
 **Architecture:**
 
@@ -47,7 +47,7 @@ pnpm run test:watch    # Watch mode
 pnpm run test:coverage # Coverage report
 pnpm run test:integration # Integration tests only
 pnpm run test:unit     # Unit tests only
-pnpm run test:ci       # CI mode (coverage + 2 workers)
+pnpm run test:ci       # CI mode (coverage, single worker — maxWorkers: 1; parallel workers would corrupt the shared-DB truncation cleanup)
 
 # Linting
 pnpm run lint          # Check for issues
@@ -107,9 +107,12 @@ pnpm run start:prod    # Run in production mode
 - Available error classes:
   - `AppError` - Base class for all custom errors
   - `AuthError`, `InvalidCredentialsError`, `NoTokenError`, `InvalidTokenError` - Authentication errors (401)
-  - `ValidationError`, `DuplicateEmailError`, `InvalidIdFormatError` - Validation errors (400)
+  - `ValidationError`, `InvalidIdFormatError` - Validation errors (400)
+  - `ForbiddenError` - Authorization errors (403)
   - `NotFoundError`, `TodoNotFoundError`, `RouteNotFoundError` - Not found errors (404)
+  - `ConflictError`, `DuplicateEmailError`, `DuplicateValueError` - Conflict errors (409)
   - `InternalServerError` - Server errors (500)
+  - `ServiceUnavailableError`, `DatabaseUnavailableError` - Transient errors (503, sets Retry-After)
 - Return early for error conditions
 - Log errors with full context before responding
 - Error response format:
@@ -133,7 +136,7 @@ For the full testing guide (structure, helpers reference, writing tests, databas
 
 ### Framework
 
-- Jest 29.7.0 with TypeScript support (ts-jest, ESM)
+- Jest 30.4.2 with TypeScript support (ts-jest, ESM)
 - PostgreSQL with Prisma for isolated testing
 - Supertest for HTTP assertions
 
@@ -178,6 +181,7 @@ For the full testing guide (structure, helpers reference, writing tests, databas
 ### Coverage Requirements
 
 - Minimum 80% coverage for branches, functions, lines, and statements
+- The gate covers all of `src/**` except `src/index.ts` (process bootstrap), `src/middleware/logger.ts` (transport config), and `src/types/` (no runtime code) — see `collectCoverageFrom` in `jest.config.ts`
 - Run `pnpm run test:coverage` to verify
 
 ## Security Considerations
@@ -215,6 +219,7 @@ For the full testing guide (structure, helpers reference, writing tests, databas
    - Login per email: 30 attempts per hour (caps single-account brute-force regardless of source IP)
    - Read operations: 100 per minute (per IP)
    - Write operations: 30 per minute (per IP)
+   - With `REDIS_URL` set, limiters are Redis-backed (cross-instance); if Redis is unavailable they degrade to a per-instance memory store (`src/middleware/rateLimitStore.ts`) rather than failing requests — watch `rate_limit_store_fallback_total`
    - Rate limiting is skipped in the `test` environment and when `DISABLE_RATE_LIMIT=true`. In production (`NODE_ENV=production`) the latter requires the paired `DISABLE_RATE_LIMIT_PRODUCTION_CONFIRM=true` flag — startup aborts otherwise. Use only on a dedicated benchmark process.
 
 ### Input Validation
@@ -245,6 +250,17 @@ PORT=3001                                                         # Server port
 4. Run `pnpm install`
 5. Run `pnpm exec prisma migrate dev` to setup database
 6. Run `pnpm run dev`
+
+### Schema changes
+
+The `audit_entries` hypertable, its `idx_audit_*` indexes, retention policy, and append-only REVOKE
+exist only in raw migration SQL — `schema.prisma` does not describe them, so Prisma's diff engine
+will generate SQL to drop them. Two hard rules (details: `docs/operations.md` → "Migration hazards"):
+
+- **Never run `prisma db push`.**
+- **Create migrations with `prisma migrate dev --create-only`** and hand-review the generated SQL;
+  delete any statement touching `audit_entries` unless deliberate. A guard test
+  (`__tests__/unit/migrations-guard.test.ts`) fails CI on violations.
 
 ## Commit Guidelines
 

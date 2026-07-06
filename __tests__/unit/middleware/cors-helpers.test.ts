@@ -1,5 +1,6 @@
 import { jest } from '@jest/globals';
 import { parseOrigins, createOriginValidator } from '@/middleware/cors.js';
+import { ForbiddenError } from '@/errors/index.js';
 
 describe('parseOrigins', () => {
   it('returns "*" when the input is the wildcard', () => {
@@ -62,8 +63,13 @@ describe('createOriginValidator', () => {
         callback,
       );
       expect(callback).toHaveBeenCalledWith(expect.any(Error), false);
-      const errArg = callback.mock.calls[0]?.[0] as Error;
+      const errArg = callback.mock.calls[0]?.[0] as ForbiddenError;
       expect(errArg.message).toMatch(/not allowed by CORS policy/);
+      // Policy denial is a 403, not a 500 — and never echoes the denied origin.
+      expect(errArg).toBeInstanceOf(ForbiddenError);
+      expect(errArg.statusCode).toBe(403);
+      expect(errArg.code).toBe('CORS_ORIGIN_DENIED');
+      expect(errArg.message).not.toContain('evil.com');
     });
   });
 
@@ -80,8 +86,11 @@ describe('createOriginValidator', () => {
       const callback = jest.fn();
       (validator as (origin: string | undefined, cb: typeof callback) => void)(undefined, callback);
       expect(callback).toHaveBeenCalledWith(expect.any(Error), false);
-      const errArg = callback.mock.calls[0]?.[0] as Error;
+      const errArg = callback.mock.calls[0]?.[0] as ForbiddenError;
       expect(errArg.message).toMatch(/Requests without an Origin header/);
+      expect(errArg).toBeInstanceOf(ForbiddenError);
+      expect(errArg.statusCode).toBe(403);
+      expect(errArg.code).toBe('CORS_NO_ORIGIN');
     });
   });
 });

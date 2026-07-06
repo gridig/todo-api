@@ -1,7 +1,7 @@
 import express, { Response, Router } from 'express';
 import jwt from 'jsonwebtoken';
 import { createHash } from 'node:crypto';
-import UserService, { DUMMY_PASSWORD_HASH } from '../models/User.js';
+import UserService, { DUMMY_PASSWORD_HASH, normalizeEmail } from '../models/User.js';
 import { env } from '../config/env.js';
 import { authLimiter, loginEmailLimiter, registerLimiter } from '../middleware/rateLimiter.js';
 import { validate, schemas } from '../middleware/validation.js';
@@ -17,8 +17,11 @@ import type {
   RequestWithLogger,
 } from '../types/index.js';
 
-const hashEmail = (email: string): string =>
-  createHash('sha256').update(email.toLowerCase().trim()).digest('hex');
+// Hash the canonical form (NFC + lowercase + trim, same as storage and the
+// rate-limit key) so audit emailHash values correlate across Unicode variants.
+// Exported for the canonicalization unit test.
+export const hashEmail = (email: string): string =>
+  createHash('sha256').update(normalizeEmail(email)).digest('hex');
 
 const router: Router = express.Router();
 

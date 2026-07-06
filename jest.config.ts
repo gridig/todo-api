@@ -19,10 +19,15 @@ export default {
   },
   testMatch: ['**/__tests__/**/*.test.ts'],
   collectCoverageFrom: [
-    'src/models/**/*.ts',
-    'src/middleware/**/*.ts',
-    'src/routes/**/*.ts',
+    // Whole runtime surface. Justified excludes only:
+    //   index.ts  — process bootstrap (cluster fork, signal handlers); needs a
+    //               live process, not unit-coverable
+    //   logger.ts — pino transport config, no meaningful branches
+    //   types/    — no runtime code
+    'src/**/*.ts',
+    '!src/index.ts',
     '!src/middleware/logger.ts',
+    '!src/types/**',
     '!node_modules/**',
   ],
   coverageThreshold: {

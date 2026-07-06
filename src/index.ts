@@ -142,8 +142,10 @@ export function setupGracefulShutdown(server: Server): void {
     // 1. K8s drain window: keep accepting requests while routing tables propagate
     await new Promise((resolve) => setTimeout(resolve, env.SHUTDOWN_DELAY_MS));
 
-    // 2. Drop idle keep-alive connections so server.close() can actually finish
-    server.closeAllConnections();
+    // 2. Drop idle keep-alive connections so server.close() can actually finish.
+    // Idle-only on purpose: closeAllConnections() would also destroy sockets
+    // with in-flight requests, defeating the drain in step 3.
+    server.closeIdleConnections();
 
     // 3. Stop accepting new connections and wait for in-flight requests to complete
     await new Promise<void>((resolve, reject) =>
@@ -153,8 +155,14 @@ export function setupGracefulShutdown(server: Server): void {
 
     // 4. Only disconnect DB after HTTP is fully drained
     if (redisClient) {
-      await redisClient.quit();
-      logger.info('Redis connection closed');
+      // A client stuck mid-connect (or already errored) can reject quit();
+      // that must not abort the drain via the unhandledRejection exit(1).
+      try {
+        await redisClient.quit();
+        logger.info('Redis connection closed');
+      } catch (err) {
+        logger.warn({ err }, 'Redis quit failed during shutdown');
+      }
     }
 
     if (poolHealthInterval) {

@@ -18,7 +18,7 @@ Three areas where the current implementation diverges from correct production be
 
 **Race condition (correctness bug).** `server.close()` in `setupGracefulShutdown()` is fire-and-forget. `prisma.$disconnect()` runs immediately in parallel, racing any in-flight requests that `server.close()` is still draining. A request mid-flight loses its database connection before it completes. `process.exit(0)` then fires as soon as the disconnect resolves, not after the HTTP server has confirmed it closed — so the "HTTP server closed" log message likely never prints.
 
-**Hanging shutdown (liveness bug).** `server.close()` stops accepting new connections but does not close existing idle keep-alive connections. Without `server.closeAllConnections()` (Node 18.2+), an idle connection from a load balancer health check prevents `server.close()` from ever calling its callback, hanging the process indefinitely.
+**Hanging shutdown (liveness bug).** `server.close()` stops accepting new connections but does not close existing idle keep-alive connections. Without `server.closeIdleConnections()` (Node 18.2+), an idle connection from a load balancer health check prevents `server.close()` from ever calling its callback, hanging the process indefinitely. (`closeAllConnections()` is the wrong tool here — it also destroys sockets with requests still in flight, defeating the drain.)
 
 **No force-close timeout.** If draining takes longer than expected — slow request, stuck connection — the process hangs forever. No `setTimeout` forces exit after a configurable deadline.
 
@@ -57,7 +57,7 @@ Rewrite `setupGracefulShutdown()` with the correct sequence:
 
 1. Register a force-exit `setTimeout` for `SHUTDOWN_TIMEOUT_MS`, marked `.unref()` so it does not prevent a clean exit on its own.
 2. `await` a `Promise` that resolves after `SHUTDOWN_DELAY_MS` — during this window the server keeps accepting requests while the load balancer drains its routing table.
-3. Call `server.closeAllConnections()` to immediately terminate idle keep-alive connections that would otherwise block `server.close()`.
+3. Call `server.closeIdleConnections()` to terminate idle keep-alive connections that would otherwise block `server.close()` — idle only, so in-flight requests keep their sockets.
 4. `await` a promisified `server.close()` — this is the point where the server stops accepting new connections and confirms all in-flight requests have completed.
 5. Only then `await prisma.$disconnect()`.
 6. Clear the force-exit timer and call `process.exit(0)`.
@@ -68,7 +68,7 @@ The corrected control flow in pseudocode:
 SIGTERM received
   → start SHUTDOWN_TIMEOUT_MS force-exit timer (unref'd)
   → await sleep(SHUTDOWN_DELAY_MS)          ← K8s drain window
-  → server.closeAllConnections()            ← close idle keep-alives
+  → server.closeIdleConnections()           ← close idle keep-alives
   → await server.close()                    ← drain in-flight requests
   → await prisma.$disconnect()              ← DB only after HTTP is done
   → clearTimeout(forceExitTimer)
@@ -176,7 +176,7 @@ Update assertions in any test that currently expects `{ error: [{ field, message
 
 | This plan                                               | Roadmap item                       | Notes                                                                                                                  |
 | ------------------------------------------------------- | ---------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
-| Shutdown sequence fix + K8s delay + force-close timeout | #15 Graceful Shutdown Drain Period | This plan is a superset — adds the race condition fix, `closeAllConnections()`, K8s delay, and force-exit timer        |
+| Shutdown sequence fix + K8s delay + force-close timeout | #15 Graceful Shutdown Drain Period | This plan is a superset — adds the race condition fix, `closeIdleConnections()`, K8s delay, and force-exit timer       |
 | Dead pool fix + pool configuration                      | #12 Connection Pool Configuration  | This plan fixes the root cause differently: passes the configured pool to the adapter rather than removing it          |
 | Redis rate limit store                                  | #16 Distributed Rate Limit Store   | Same outcome; roadmap item specifies `ioredis`, this plan uses the official `redis` client — align before implementing |
 | Process error handlers + error handling consistency     | No existing item                   | Net new; not currently tracked in the roadmap                                                                          |

@@ -1,13 +1,13 @@
 import express, { Request, Response, Router } from 'express';
 import TodoService from '../models/Todo.js';
-import { auth } from '../middleware/auth.js';
+import { auth, requireUserId } from '../middleware/auth.js';
 import { readLimiter, writeLimiter } from '../middleware/rateLimiter.js';
 import { validate, validateQuery, validateParams, schemas } from '../middleware/validation.js';
 import { TodoNotFoundError, InternalServerError } from '../errors/index.js';
 import { writeOrLog } from '../lib/auditLog.js';
 import { AuditAction } from '../lib/auditActions.js';
 import prisma from '../lib/prisma.js';
-import type { AuthenticatedRequest, CreateTodoRequest, PaginationParams } from '../types/index.js';
+import type { CreateTodoRequest, PaginationParams, RequestWithLogger } from '../types/index.js';
 
 const router: Router = express.Router();
 
@@ -18,7 +18,8 @@ router.get(
   readLimiter,
   validateQuery(schemas.pagination),
   async (req, res: Response): Promise<void> => {
-    const { userId, log, id: requestId } = req as AuthenticatedRequest;
+    const { log, id: requestId } = req as RequestWithLogger;
+    const userId = requireUserId(req);
     try {
       const params: PaginationParams = {
         ...(req.query.limit !== undefined && { limit: Number(req.query.limit) }),
@@ -61,7 +62,8 @@ router.post(
   writeLimiter,
   validate(schemas.todo),
   async (req, res: Response): Promise<void> => {
-    const { userId, log, id: requestId } = req as AuthenticatedRequest;
+    const { log, id: requestId } = req as RequestWithLogger;
+    const userId = requireUserId(req);
     try {
       const { text } = req.body as CreateTodoRequest;
       const newTodo = await TodoService.create({ text, userId });
@@ -101,7 +103,8 @@ router.get(
   readLimiter,
   validateParams(schemas.paramsSchema),
   async (req: Request<{ id: string }>, res: Response): Promise<void> => {
-    const { userId, log, id: requestId } = req as AuthenticatedRequest;
+    const { log, id: requestId } = req as RequestWithLogger;
+    const userId = requireUserId(req);
     try {
       const todo = await TodoService.findOne({
         id: req.params.id,
@@ -172,7 +175,8 @@ router.patch(
   writeLimiter,
   validateParams(schemas.paramsSchema),
   async (req: Request<{ id: string }>, res: Response): Promise<void> => {
-    const { userId, log, id: requestId } = req as AuthenticatedRequest;
+    const { log, id: requestId } = req as RequestWithLogger;
+    const userId = requireUserId(req);
     try {
       const updatedTodo = await TodoService.toggleDone({
         id: req.params.id,
@@ -244,7 +248,8 @@ router.delete(
   writeLimiter,
   validateParams(schemas.paramsSchema),
   async (req: Request<{ id: string }>, res: Response): Promise<void> => {
-    const { userId, log, id: requestId } = req as AuthenticatedRequest;
+    const { log, id: requestId } = req as RequestWithLogger;
+    const userId = requireUserId(req);
     try {
       const todo = await TodoService.delete({
         id: req.params.id,

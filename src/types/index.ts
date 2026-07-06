@@ -24,16 +24,6 @@ export interface Todo {
 
 // ==================== Request Extensions ====================
 
-export interface AuthenticatedRequestBody<TParams = object, TBody = unknown> extends Request<
-  TParams,
-  unknown,
-  TBody
-> {
-  userId: string;
-  id: string;
-  log: Logger;
-}
-
 // Simple version for routes without params
 export type AuthenticatedRequest = Request & {
   userId: string;
@@ -108,23 +98,6 @@ export interface JWTPayload {
   aud?: string;
   iat?: number;
   exp?: number;
-}
-
-// ==================== Environment Types ====================
-
-export interface EnvConfig {
-  NODE_ENV: 'development' | 'production' | 'test';
-  PORT: number;
-  DATABASE_URL: string;
-  JWT_SECRET: string;
-  CORS_ORIGIN: string;
-  CORS_CREDENTIALS: string;
-  CORS_METHODS: string;
-  CORS_HEADERS: string;
-  CORS_MAX_AGE: string;
-  LOG_LEVEL?: string;
-  LOG_FILE_PATH: string;
-  LOG_MAX_FILE_SIZE: string;
 }
 
 // ==================== Middleware Types ====================

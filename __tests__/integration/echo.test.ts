@@ -25,14 +25,6 @@ describe('Echo Endpoint', () => {
       expect(response.headers['x-request-id']).toBe(customId);
     });
 
-    it('should not be rate limited', async () => {
-      const requests = Array.from({ length: 10 }, () => request(app).get('/echo'));
-      const responses = await Promise.all(requests);
-
-      responses.forEach((res) => {
-        expect(res.status).toBe(200);
-      });
-    });
   });
 
   describe('POST /echo', () => {

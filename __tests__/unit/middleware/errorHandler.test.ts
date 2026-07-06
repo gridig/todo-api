@@ -34,6 +34,19 @@ describe('Error Handler Middleware', () => {
     next = jest.fn();
   });
 
+  describe('headersSent', () => {
+    it('delegates to next(err) without writing when headers are already sent', () => {
+      res.headersSent = true;
+      const error = new Error('late failure');
+
+      errorHandler(error, req, res, next);
+
+      expect(next).toHaveBeenCalledWith(error);
+      expect(res.status).not.toHaveBeenCalled();
+      expect(res.json).not.toHaveBeenCalled();
+    });
+  });
+
   describe('AppError handling', () => {
     it('should handle custom AppError instances', () => {
       const error = new TodoNotFoundError();

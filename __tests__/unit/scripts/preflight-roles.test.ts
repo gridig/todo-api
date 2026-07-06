@@ -23,6 +23,21 @@ describe('runPreflight', () => {
     );
   });
 
+  it('falls back to DATABASE_URL when DATABASE_MIGRATE_URL is explicitly empty', async () => {
+    const queryRoles = jest.fn<QueryRoles>().mockResolvedValue(ALL_ROLES);
+    const log = makeLog();
+
+    const code = await runPreflight({
+      env: { DATABASE_MIGRATE_URL: '', DATABASE_URL: DSN },
+      queryRoles,
+      sleep: noSleep,
+      log,
+    });
+
+    expect(code).toBe(0);
+    expect(queryRoles).toHaveBeenCalledWith(DSN, 5000);
+  });
+
   it('does not retry the deterministic missing-roles outcome', async () => {
     const queryRoles = jest.fn<QueryRoles>().mockResolvedValue(['db_app']);
     const sleep = jest.fn<(ms: number) => Promise<void>>();

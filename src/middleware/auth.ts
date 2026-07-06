@@ -1,12 +1,25 @@
 import jwt from 'jsonwebtoken';
-import { Response, NextFunction } from 'express';
+import { Request, Response, NextFunction } from 'express';
 import { env } from '../config/env.js';
-import { NoTokenError, InvalidTokenError } from '../errors/index.js';
+import { NoTokenError, InvalidTokenError, InternalServerError } from '../errors/index.js';
 import { requestContext } from '../lib/requestContext.js';
 import { writeOrLog } from '../lib/auditLog.js';
 import { AuditAction } from '../lib/auditActions.js';
 import prisma from '../lib/prisma.js';
 import type { RequestWithLogger } from '../types/index.js';
+
+// The only sanctioned way for handlers to read the authenticated user id.
+// req.userId is optional on the global Request type, so a route accidentally
+// mounted without the auth middleware would otherwise flow `undefined` into
+// user-isolation query keys and silently match nothing. Throwing converts
+// that wiring bug into a loud 500 at the first request.
+export const requireUserId = (req: Request): string => {
+  const { userId } = req as Request & { userId?: unknown };
+  if (typeof userId !== 'string' || userId.length === 0) {
+    throw new InternalServerError();
+  }
+  return userId;
+};
 
 const TOKEN_REASON_MAX_LEN = 100;
 // Generous cap — real JWTs run ~1–2 KiB. Treats oversized headers as empty so

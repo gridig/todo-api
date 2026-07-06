@@ -1,5 +1,6 @@
 import cors from 'cors';
 import { env } from '../config/env.js';
+import { ForbiddenError } from '../errors/index.js';
 import type { CorsOptions } from 'cors';
 
 /**
@@ -43,12 +44,19 @@ export const createOriginValidator = (
     return undefined; // Allow all origins
   }
 
+  // ForbiddenError (403) rather than a plain Error: the cors package forwards
+  // this to the error handler, and a policy denial is a client-side 403, not a
+  // 500 that pages on-call. The denied origin is deliberately not echoed —
+  // it's attacker-controlled input.
   return (origin: string | undefined, callback: OriginCallback): void => {
     if (!origin) {
       if (allowNoOrigin) {
         callback(null, true);
       } else {
-        callback(new Error('Requests without an Origin header are not allowed'), false);
+        callback(
+          new ForbiddenError('Requests without an Origin header are not allowed', 'CORS_NO_ORIGIN'),
+          false,
+        );
       }
       return;
     }
@@ -56,7 +64,7 @@ export const createOriginValidator = (
     if (allowedOrigins.includes(origin)) {
       callback(null, true);
     } else {
-      callback(new Error(`Origin ${origin} not allowed by CORS policy`), false);
+      callback(new ForbiddenError('Origin not allowed by CORS policy', 'CORS_ORIGIN_DENIED'), false);
     }
   };
 };
