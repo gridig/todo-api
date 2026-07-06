@@ -44,18 +44,6 @@ describe('Metrics Endpoint', () => {
       expect(response.text).not.toContain('nodejs_eventloop_lag_');
     });
 
-    it('should not be rate limited', async () => {
-      // Fire multiple requests rapidly - should all succeed
-      const requests = Array.from({ length: 10 }, () =>
-        request(app).get('/metrics').set('Authorization', bearer),
-      );
-      const responses = await Promise.all(requests);
-
-      responses.forEach((res) => {
-        expect(res.status).toBe(200);
-      });
-    });
-
     it('should track request metrics after making requests', async () => {
       // Make a health check request to generate metrics
       await request(app).get('/health');

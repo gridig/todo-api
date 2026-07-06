@@ -1,5 +1,6 @@
 import prisma from '../lib/prisma.js';
 import auditLog from '../lib/auditLog.js';
+import { env } from '../config/env.js';
 import { AuditAction } from '../lib/auditActions.js';
 import type {
   Todo,
@@ -113,7 +114,12 @@ export const TodoService: TodoServiceInterface = {
     });
   },
 
+  // Unscoped wipe — test-suite cleanup only. Guarded so a stray call can never
+  // truncate a real environment. Production code paths use deleteManyByUser.
   async deleteMany(filter = {}) {
+    if (env.NODE_ENV !== 'test') {
+      throw new Error('TodoService.deleteMany is test-only: default filter deletes every todo');
+    }
     return prisma.todo.deleteMany({ where: filter });
   },
 

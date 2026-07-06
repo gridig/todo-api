@@ -92,6 +92,42 @@ was recovered as follows. Run against the prod DB as a superuser (via the public
 > migration file, so editing one breaks every environment that already ran it. Fix the environment, or
 > add a new migration.
 
+## Migration hazards
+
+Two standing hazards in the committed migration chain. Neither can be edited away (see the checksum
+warning above); they are documented so nobody trips them.
+
+### `0_init` must never be baselined alone
+
+`20260131221639_init` begins with `DROP TABLE "Todo"` / `DROP TABLE "User"` — it replaces the
+PascalCase tables that `0_init` creates with the snake_case `todos`/`users` schema. On the normal
+fresh-database chain this is harmless (the dropped tables are seconds old and empty). It becomes
+**data loss** if `0_init` is ever baselined onto an existing database that holds data in those
+tables: `prisma migrate resolve --applied 0_init` followed by `migrate deploy` runs the DROPs
+against live data.
+
+Rule: **baseline all migrations or none.** When adopting an existing database, mark the full chain
+applied (or restore-and-replay); never mark a prefix of it.
+
+(A squash-baseline that removes the pair entirely was considered and deferred: rewriting the chain
+risks divergence across the three live environments for a bug that is latent-only.)
+
+### `audit_entries` guarantees live outside `schema.prisma`
+
+The audit table's hypertable conversion, its four `idx_audit_*` indexes, the 1-year retention
+policy, and the append-only `REVOKE UPDATE, DELETE, TRUNCATE … FROM db_app` exist **only** in raw
+SQL (`prisma/migrations/20260526000001_add_audit_entries/migration.sql`). Prisma's schema knows
+none of them, so schema-diffing tools will try to "fix" the difference:
+
+- **Never run `prisma db push`** against any database with the audit table — it diffs live DB
+  against `schema.prisma` and will drop the indexes and can desync the REVOKE.
+- **Always create migrations with `prisma migrate dev --create-only`** and hand-review the generated
+  SQL before applying. Delete any generated statement that touches `audit_entries` (`DROP INDEX
+  idx_audit_*`, `ALTER TABLE audit_entries …`) unless the change is deliberate.
+
+A guard test (`__tests__/unit/migrations-guard.test.ts`) fails CI if a committed migration contains
+such statements — that is the enforcement point; this section is the explanation.
+
 ## Database restore (disaster recovery)
 
 The TimescaleDB service runs pgBackRest co-located in its container, archiving WAL continuously and

@@ -29,7 +29,14 @@ echo "Measuring container startup time..."
 START=$(now_ms)
 docker compose up -d app
 
+# Bounded: a never-healthy app must fail the benchmark, not hang it forever.
+DEADLINE=$(( $(date +%s) + 120 ))
 until curl -sf "http://localhost:${PORT}/health/ready" > /dev/null 2>&1; do
+  if (( $(date +%s) >= DEADLINE )); then
+    echo "ERROR: app never became healthy within 120s" >&2
+    docker compose logs app >&2
+    exit 1
+  fi
   sleep 0.1
 done
 

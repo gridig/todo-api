@@ -73,10 +73,11 @@ build details: [pgbackrest-implementation.md](pgbackrest-implementation.md).
 
 ### Application
 
-| Variable   | Type   | Default       | Description                               |
-| ---------- | ------ | ------------- | ----------------------------------------- |
-| `PORT`     | Port   | `3001`        | Server port number                        |
-| `NODE_ENV` | String | `development` | Environment (development/production/test) |
+| Variable      | Type   | Default       | Description                                                                                                                                                    |
+| ------------- | ------ | ------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `PORT`        | Port   | `3001`        | Server port number                                                                                                                                             |
+| `NODE_ENV`    | String | `development` | Environment (development/production/test)                                                                                                                      |
+| `TRUST_PROXY` | Number | `1`           | Trusted proxy hop count (Express `trust proxy`). Railway / single LB = `1`; add one per extra fronting proxy. Too high lets clients spoof `req.ip` via `X-Forwarded-For`. |
 
 ### Logging
 

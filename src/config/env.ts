@@ -107,6 +107,14 @@ export const env = cleanEnv(process.env, {
     desc: 'Whether to accept requests without an Origin header (e.g. server-to-server, mobile apps, curl). Set to false in browser-only deployments to require an explicit, allow-listed origin.',
   }),
 
+  // Number of proxy hops Express trusts when deriving req.ip (rate-limit keys,
+  // audit sourceIp). Railway / single LB = 1; add one per additional fronting
+  // proxy (e.g. CDN in front of the LB = 2).
+  TRUST_PROXY: num({
+    default: 1,
+    desc: 'Trusted proxy hop count for req.ip (Express "trust proxy" setting)',
+  }),
+
   // HTTP Request Body Limit
   BODY_LIMIT: str({
     default: '16kb',

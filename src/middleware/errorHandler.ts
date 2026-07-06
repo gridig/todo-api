@@ -74,8 +74,15 @@ export const errorHandler = (
   err: Error,
   req: RequestWithLogger,
   res: Response,
-  _next: NextFunction,
+  next: NextFunction,
 ): void => {
+  // A response already on the wire can't carry a JSON error body; delegate to
+  // Express's default handler, which closes the connection.
+  if (res.headersSent) {
+    next(err);
+    return;
+  }
+
   const { log, id: requestId } = req;
   // Log error with full context
   // Using 'err' key triggers Pino's automatic error serialization

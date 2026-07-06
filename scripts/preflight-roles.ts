@@ -80,8 +80,9 @@ export async function runPreflight(options: PreflightOptions = {}): Promise<numb
   const log = options.log ?? console;
 
   // Mirrors prisma.config.ts: migrations connect via DATABASE_MIGRATE_URL when
-  // set, otherwise DATABASE_URL.
-  const connectionString = env.DATABASE_MIGRATE_URL ?? env.DATABASE_URL;
+  // set, otherwise DATABASE_URL. || not ??: an explicitly-empty
+  // DATABASE_MIGRATE_URL must fall back too.
+  const connectionString = env.DATABASE_MIGRATE_URL || env.DATABASE_URL;
   if (!connectionString) {
     log.error(
       'preflight-roles: neither DATABASE_MIGRATE_URL nor DATABASE_URL is set — cannot verify DB roles.',

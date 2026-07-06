@@ -85,8 +85,16 @@ if [[ "$DO_RESTORE" == "1" ]]; then
   echo "Restore staged. Postgres will start and replay WAL."
 fi
 
-# Background scheduler (as postgres). It waits for Postgres, creates the stanza, loops.
-su-exec postgres /usr/local/bin/backup-scheduler.sh &
+# Background scheduler (as postgres), supervised: if it dies, backups silently
+# stop, so relaunch with a logged restart instead of leaving a dead scheduler.
+# The pgbackrest_last_*_age_seconds gauges remain the alerting backstop.
+su-exec postgres bash -c '
+  while true; do
+    /usr/local/bin/backup-scheduler.sh
+    echo "backup-scheduler exited rc=$? — restarting in 60s" >&2
+    sleep 60
+  done
+' &
 
 # Hand off to the stock entrypoint with archiving on. shared_preload_libraries=timescaledb
 # stays set in postgresql.conf from initdb; we only append archiving flags here.

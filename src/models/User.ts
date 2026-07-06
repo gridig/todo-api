@@ -1,5 +1,6 @@
 import bcrypt from 'bcrypt';
 import prisma from '../lib/prisma.js';
+import { env } from '../config/env.js';
 import { UserServiceInterface } from '../types/index.js';
 
 // Bcrypt cost factor. OWASP 2024+ floor for new deployments. Existing
@@ -73,7 +74,12 @@ export const UserService: UserServiceInterface = {
     return bcrypt.getRounds(hashedPassword) < SALT_ROUNDS;
   },
 
+  // Unscoped wipe — test-suite cleanup only. Guarded so a stray call can never
+  // truncate a real environment.
   async deleteMany() {
+    if (env.NODE_ENV !== 'test') {
+      throw new Error('UserService.deleteMany is test-only: it deletes every user');
+    }
     return prisma.user.deleteMany();
   },
 };

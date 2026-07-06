@@ -19,10 +19,12 @@ import { env } from './config/env.js';
 export const createApp = (): Application => {
   const app: Application = express();
 
-  // Trust the first proxy hop (ALB / ingress). Required for req.ip to reflect
-  // the real client IP rather than the proxy — without this, rate limiters
-  // count all traffic against the proxy IP and audit log sourceIp is wrong.
-  app.set('trust proxy', 1);
+  // Trust the configured proxy hop count (ALB / ingress). Required for req.ip
+  // to reflect the real client IP rather than the proxy — without this, rate
+  // limiters count all traffic against the proxy IP and audit log sourceIp is
+  // wrong. Too high is equally bad: clients can then spoof req.ip via
+  // X-Forwarded-For, defeating per-IP limits.
+  app.set('trust proxy', env.TRUST_PROXY);
 
   // Security headers (X-Frame-Options, X-Content-Type-Options, HSTS, etc.).
   // HSTS only takes effect over HTTPS, so it is a no-op locally.
@@ -84,7 +86,3 @@ export const createApp = (): Application => {
 
   return app;
 };
-
-// Export a default app instance for convenience
-const app: Application = createApp();
-export default app;
