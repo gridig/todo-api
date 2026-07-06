@@ -6,24 +6,6 @@ This document outlines the infrastructure and production-readiness work required
 
 ## HIGH PRIORITY (Production Critical)
 
-### Database Backup & Disaster Recovery **[SOC 2]**
-
-**Priority**: High
-**Effort**: Low
-**Impact**: High
-**SOC 2**: A1.2 (Recovery Objectives), A1.3 (Recovery Testing), C1.1 (Confidential Data Protection)
-
-- [ ] Set up continuous WAL archiving + scheduled base backups (pgBackRest) to an encrypted Railway Bucket (S3-compatible), enabling point-in-time recovery — *implemented + locally verified; awaiting prod deploy* — see [docs/pgbackrest-implementation.md](docs/pgbackrest-implementation.md)
-- [x] Define backup schedule and retention policy (minimum daily, 30-day retention; design uses daily fulls + 6h diffs, 35-day PITR window)
-- [ ] Document and test restore procedure quarterly — *runbook in [docs/operations.md](docs/operations.md#database-restore-disaster-recovery); restore validated locally (WAL replay + roles); first prod drill + quarterly cadence pending*
-- [x] Define RPO (Recovery Point Objective) and RTO (Recovery Time Objective) — RPO ≤ 5 min, RTO ≤ 30 min
-- [ ] Add backup monitoring/alerting (notify on failure) — *log-based Railway alert on `ERROR:` now; Prometheus rules tracked under Monitoring & Observability*
-- [x] Ensure backups are encrypted and access-controlled — AES-256-CBC repo cipher + bucket credentials in Railway secret store
-
-**Status**: Implemented on branch `db-backup` (co-located pgBackRest in the TimescaleDB image) and verified locally — image builds, WAL archiving + scheduled full/diff work, and a restore replays WAL and brings back roles. Remaining for SOC 2 sign-off: production deploy, the first restore drill (A1.3 evidence), and Prometheus alerting (under Monitoring & Observability).
-
-**Why**: SOC 2 A1.2 requires documented recovery objectives. A1.3 requires periodic recovery testing. Auditors will ask for evidence of both the backup process and successful restore tests.
-
 ### Encryption at Rest **[SOC 2]**
 
 **Priority**: High
@@ -148,6 +130,7 @@ The Prometheus metrics endpoint is already implemented — see `middleware/metri
 - [ ] Track authentication failures **[SOC 2]** (CC7.2: detect brute force / credential stuffing)
 - [ ] Set up Grafana dashboards **[SOC 2]**
 - [ ] Add alerting for critical issues (error rate spikes, auth failures, downtime) **[SOC 2]**
+- [ ] **Backup-failure alerting** (inherited from the completed Backup & DR work) — expose the pgBackRest scheduler's metrics file (`/tmp/pgbackrest-metrics.prom`: `pgbackrest_last_full_backup_age_seconds`, `pgbackrest_last_diff_backup_age_seconds`, `pgbackrest_wal_archive_ok`) via a node_exporter textfile mount or a small HTTP exporter, then alert: no full in 30h → critical; no diff in 7h → warning; `pgbackrest_wal_archive_ok == 0` → critical (RPO at risk). Railway has no native log-content alerting, so this is the *only* backup-failure alert path — there is no interim. **[SOC 2]**
 - [ ] Instrument with OpenTelemetry SDK (`@opentelemetry/sdk-node`, `@opentelemetry/auto-instrumentations-node`) emitting OTLP — vendor-neutral; the same OTLP exporter works with any compatible backend (Jaeger, Honeycomb, Datadog, Grafana Tempo, AWS X-Ray) **[SOC 2]**
 - [ ] Ship structured logs to a central aggregator (Grafana Loki, Datadog, or stdout for container orchestrator collection) **[SOC 2]**
 - [ ] Define and monitor uptime SLA targets **[SOC 2]** (A1.2: availability commitments)
@@ -407,7 +390,7 @@ For a SOC 2-compliant production deployment, implement in this order:
 ### Phase A: Security & Infrastructure Foundation (SOC 2 blocking)
 
 - ~~**Database Connection Resilience**~~ — Startup retry (decorrelated jitter) and runtime Prisma error classification (transient → 503 `DATABASE_UNAVAILABLE` + `Retry-After`) shipped. Optional circuit breaker tracked separately.
-- **Database Backup & DR** — Automated backups, defined RPO/RTO, tested restores
+- ~~**Database Backup & DR**~~ — Done: pgBackRest live in prod, RPO/RTO defined, first A1.3 restore drill passed 2026-07-06. See **Completed** below. (Backup-failure alerting moved to **Monitoring & Observability**.)
 - **Encryption at Rest** — PostgreSQL encryption, key management documentation
 - **Secrets Management** — Encrypted-at-rest secret store, indirection from deploy artifact, rotation runbook
 
@@ -437,3 +420,18 @@ For a SOC 2-compliant production deployment, implement in this order:
 - **Search & Discovery** — Phase 1: `pg_trgm` fuzzy todo search. Phase 2: Elasticsearch multi-entity search with outbox sync once comments/attachments/notes entities exist. Design memo: [docs/databases.md](docs/databases.md)
 
 Items tagged **[SOC 2]** in Phases A–C must be completed before the SOC 2 Type II observation period can begin. The user account work is split into four independently trackable sections (User Profile Management, JWT Refresh + Token Revocation, Email Service Integration, Password Reset Flow) with clear dependency boundaries. UUID Column Type Migration is in Phase D because it is not SOC 2 blocking and should not compete with security infrastructure.
+
+---
+
+## Completed
+
+### Database Backup & Disaster Recovery **[SOC 2]** — done 2026-07-06
+
+**SOC 2**: A1.2 (Recovery Objectives), A1.3 (Recovery Testing), C1.1 (Confidential Data Protection).
+
+Co-located pgBackRest (in the TimescaleDB image) is live in production: continuous WAL archiving + scheduled daily fulls / 6h diffs to an encrypted Railway Bucket (AES-256-CBC), self-driving (autonomous daily full + diff observed), 35-day PITR window. RPO ≤ 5 min / RTO ≤ 30 min defined. **First A1.3 restore drill passed 2026-07-06** — recovery mechanism, physical role/schema recovery, and audit immutability all verified (RTO ~112s); evidence: [docs/evidence/restore-drill-2026-07-06.md](docs/evidence/restore-drill-2026-07-06.md). Design/build: [docs/pgbackrest-implementation.md](docs/pgbackrest-implementation.md); runbook + template: [docs/operations.md](docs/operations.md#database-restore-disaster-recovery), [docs/restore-drill-report-template.md](docs/restore-drill-report-template.md).
+
+**Carried into other tracks (not blockers here):**
+- **Backup-failure alerting** → **Monitoring & Observability** (Prometheus rules on the pgBackRest metrics file; Railway has no native log-content alerting, so there is no interim).
+- **Quarterly restore-drill cadence** — GitHub Actions `.github/workflows/restore-drill-reminder.yml` opens a reminder issue on the 1st of Jan/Apr/Jul/Oct (next ~2026-10-01).
+- **Data-fidelity re-run** — repeat the drill with row-count assertions once production holds real user data (the 2026-07-06 drill restored an empty DB, so it proved the mechanism but not row-level fidelity).

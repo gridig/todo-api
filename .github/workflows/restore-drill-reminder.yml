@@ -1,0 +1,46 @@
+name: Restore Drill Reminder
+
+# Opens a GitHub issue each quarter reminding the team to run the SOC 2 A1.3
+# pgBackRest restore drill and file fresh evidence. Reminder only — it performs
+# no restore and touches no infrastructure. Runbook: docs/operations.md
+# (Quarterly restore drill). Not a deploy workflow.
+
+on:
+  schedule:
+    - cron: '0 8 1 1,4,7,10 *' # 08:00 UTC on the 1st of Jan/Apr/Jul/Oct
+  workflow_dispatch:
+
+permissions:
+  issues: write
+
+jobs:
+  remind:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Open restore-drill reminder issue
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          quarter=$(( ($(date -u +%-m) - 1) / 3 + 1 ))
+          title="SOC 2 A1.3 restore drill due — $(date -u +%Y) Q${quarter}"
+          cat > /tmp/body.md <<'EOF'
+          The quarterly pgBackRest **restore drill** is due this quarter to maintain SOC 2 A1.3
+          (recovery testing) evidence and the quarterly cadence.
+
+          **Run it** — follow the runbook: `docs/operations.md` → *Quarterly restore drill (SOC 2 A1.3)*.
+
+          **File evidence** — copy `docs/restore-drill-report-template.md` to
+          `docs/evidence/restore-drill-YYYY-MM-DD.md`, fill it in, and commit.
+
+          **Gotchas carried from the 2026-07-06 drill:**
+          - Use `railway ssh` (the CLI dropped `railway exec`).
+          - Railway Bucket has no read-only keys → isolate via a scratch bucket copied with
+            `rclone sync`, not read-only creds.
+          - Set `PGBACKREST_PG1_USER=railway` on the drill service; connect with `psql -U railway -d railway`.
+          - The first drill restored an **empty** DB — if production now holds real user rows, also do
+            the **data-fidelity re-run** (row-count assertions), not just the mechanism check.
+
+          Close this issue once the evidence file is committed.
+          EOF
+          gh issue create --repo "$REPO" --title "$title" --body-file /tmp/body.md
