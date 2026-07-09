@@ -13,9 +13,10 @@ A production-ready RESTful API for managing todos with user authentication.
 - PostgreSQL with Prisma ORM 7.x
 - JWT authentication (jsonwebtoken 9.0.3)
 - Bcrypt password hashing (6.0.0, 12 salt rounds)
+- Helmet secure HTTP headers (8.x)
 - Joi validation (18.x)
 - Pino structured logging (10.x)
-- Express-rate-limit (8.5.2)
+- Express-rate-limit (8.5.2), optional Redis store (redis 6.x, rate-limit-redis 5.x)
 - Testing: Jest 30.4.2, ts-jest, Supertest
 
 **Architecture:**
@@ -24,11 +25,12 @@ A production-ready RESTful API for managing todos with user authentication.
 - `src/app.ts` - Express app factory, middleware pipeline, route mounting
 - `src/config/env.ts` - Environment variable validation with envalid
 - `src/types/` - TypeScript type definitions (index.ts, express.d.ts)
-- `src/errors/` - Custom error classes (AppError, AuthError, ValidationError, NotFoundError)
-- `src/lib/` - Prisma client, DB connection, audit logging, request context
+- `src/errors/` - Custom error classes (index.ts; database.ts maps Prisma/pg errors)
+- `src/lib/` - Prisma client, DB connect-with-retry (`dbConnect.ts`, `retry.ts`), audit logging, request context
 - `src/models/` - Prisma models (User, Todo)
 - `src/routes/` - Express routers (auth, todos, health)
-- `src/middleware/` - Auth, validation, rate limiting, logging, error handling
+- `src/middleware/` - Auth, validation, rate limiting (+ `rateLimitStore.ts` Redis/memory fallback), logging, error handling
+- `scripts/preflight-roles.ts` - Pre-deploy DB role/privilege verification (runs before `prisma migrate deploy`)
 
 ## Build and Test Commands
 
@@ -345,18 +347,19 @@ When an item from the roadmap is completed:
 
 Detailed reference docs live in `docs/`. The README is a landing page with summaries and links.
 
-| File                          | Content                                                                                         |
-| ----------------------------- | ----------------------------------------------------------------------------------------------- |
-| `README.md`                   | Quickstart, architecture, features, summary tables                                              |
-| `docs/api.md`                 | Full API endpoint reference, error codes, status codes                                          |
-| `docs/configuration.md`       | All environment variables, CORS setup, `.env` examples                                          |
-| `docs/docker.md`              | Docker build, run, production config, troubleshooting                                           |
-| `docs/operations.md`          | Deploy runbooks: DB role bootstrap, deploy preflight, failed-migration (P3009) recovery         |
-| `docs/benchmarks.md`          | Benchmark methodology, k6 scripts, load levels, reproduction                                    |
-| `docs/testing.md`             | Test framework, helpers, writing tests, CI config                                               |
-| `docs/runtime-correctness.md` | Production runtime correctness plan (shutdown, pool, error handling)                            |
-| `docs/databases.md`           | Design memo for the audit-log (TimescaleDB) and future search (pg_trgm → Elasticsearch) workstreams |
-| `ROADMAP.md`                  | Phased platform/production-readiness plan (SOC 2 priorities, open vs. done)                     |
+| File                                | Content                                                                                             |
+| ----------------------------------- | --------------------------------------------------------------------------------------------------- |
+| `README.md`                         | Quickstart, architecture, features, summary tables                                                  |
+| `docs/api.md`                       | Full API endpoint reference, error codes, status codes                                              |
+| `docs/configuration.md`             | All environment variables, CORS setup, `.env` examples                                              |
+| `docs/docker.md`                    | Docker build, run, production config, troubleshooting                                               |
+| `docs/operations.md`                | Deploy runbooks: DB role bootstrap, deploy preflight, failed-migration (P3009) recovery             |
+| `docs/pgbackrest-implementation.md` | pgBackRest backup and disaster-recovery guide (co-located Postgres image)                           |
+| `docs/benchmarks.md`                | Benchmark methodology, k6 scripts, load levels, reproduction                                        |
+| `docs/testing.md`                   | Test framework, helpers, writing tests, CI config                                                   |
+| `docs/runtime-correctness.md`       | Production runtime correctness plan (shutdown, pool, error handling)                                |
+| `docs/databases.md`                 | Design memo for the audit-log (TimescaleDB) and future search (pg_trgm → Elasticsearch) workstreams |
+| `ROADMAP.md`                        | Phased platform/production-readiness plan (SOC 2 priorities, open vs. done)                         |
 
 When changing API endpoints, update `docs/api.md`. When adding environment variables, update `docs/configuration.md`. When changing test infrastructure, update `docs/testing.md`. When changing benchmark infrastructure, update `docs/benchmarks.md`.
 

@@ -23,7 +23,12 @@ model Todo {
 
 model User {
   id         String   @id @default(uuid()) @db.Uuid
-  email      String   @unique
+  // AES-256-GCM ciphertext envelope (lib/crypto/fieldCrypto.ts). NOT unique —
+  // randomized ciphertext can't back a unique constraint; emailHash does.
+  email      String
+  // Keyed HMAC-SHA256 blind index over the canonical email. Carries account
+  // uniqueness and every login lookup (findByEmail).
+  emailHash  String   @unique @map("email_hash")
   password   String
   createdAt  DateTime @default(now()) @map("created_at")
   updatedAt  DateTime @updatedAt @map("updated_at")

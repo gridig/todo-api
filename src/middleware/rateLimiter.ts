@@ -11,6 +11,7 @@ import logger from './logger.js';
 import { env } from '../config/env.js';
 import { rateLimitHitsTotal, rateLimitStoreFallbackTotal } from './metrics.js';
 import { FallbackStore } from './rateLimitStore.js';
+import { blindIndex } from '../lib/crypto/fieldCrypto.js';
 
 // Create module-specific logger
 const rateLimitLogger = logger.child({ module: 'rate-limiter' });
@@ -88,20 +89,21 @@ export const logRateLimitHandler = (limitType: string): RateLimitHandler => {
   };
 };
 
-// Extract the login email for use in rate-limit keys. The validator runs
-// after the limiter (we don't want to spend validation work on
-// rate-limited traffic), so the limiter must canonicalize the email
-// itself. NFC + lowercase + trim mirrors the Joi schema in
-// middleware/validation.ts and the storage path in models/User.ts —
-// keeping all three in lockstep prevents Unicode-variant evasion of the
-// per-email cap (NFC vs NFD, full-width Latin, IDN homoglyphs).
-// Returns '' when no parsable body is present (the empty-key bucket then
-// catches malformed/empty-email floods globally — fine, that traffic is
+// Derive the per-email rate-limit key. The validator runs after the limiter
+// (we don't want to spend validation work on rate-limited traffic), so the
+// limiter must canonicalize the email itself. We return the keyed blind index
+// (HMAC over the NFC+lowercase+trim form — the same transform used by the Joi
+// schema in middleware/validation.ts and the stored blind index in
+// models/User.ts) rather than the raw address, so the plaintext email never
+// lands in a Redis rate-limit key. Because blindIndex normalizes internally,
+// Unicode variants (NFC vs NFD, full-width, IDN homoglyph) of one address still
+// share a bucket. Returns '' when no parsable email is present (the empty-key
+// bucket then catches malformed/empty-email floods globally — that traffic is
 // also a quasi-attack signal).
 export const loginEmailKey = (req: Request): string => {
   const body = req.body as { email?: unknown } | undefined;
   if (body && typeof body.email === 'string') {
-    return body.email.normalize('NFC').toLowerCase().trim();
+    return blindIndex(body.email);
   }
   return '';
 };

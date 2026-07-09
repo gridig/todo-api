@@ -86,19 +86,21 @@ curl http://localhost:3001/todos \
 ├─────────────────────────────────────────────────────────────────┤
 │                     Middleware Pipeline                         │
 │  ┌───────────────────────────────────────────────────────────┐  │
-│  │  1.  Request ID Generation (requestId.ts)                 │  │
-│  │  2.  Request Context — ALS scope (requestContext.ts)      │  │
-│  │  3.  Metrics Instrumentation (metrics.ts)                 │  │
-│  │  4.  Echo Route (/echo — benchmark only, no logging)      │  │
-│  │  5.  Request Logger (requestLogger.ts)                    │  │
-│  │  6.  CORS Handler (cors.ts)                               │  │
-│  │  7.  Health Routes (/health — exempt from rate limiting)  │  │
-│  │  8.  Metrics Route (/metrics — optional token auth)       │  │
-│  │  9.  Global Rate Limiter (rateLimiter.ts)                 │  │
-│  │  10. JSON Body Parser                                     │  │
-│  │  11. Route Handlers (per-route auth, validation, limits)  │  │
-│  │  12. 404 Handler                                          │  │
-│  │  13. Error Handler (errorHandler.ts)                      │  │
+│  │  1.  Trust Proxy (env TRUST_PROXY)                        │  │
+│  │  2.  Helmet — secure HTTP headers                         │  │
+│  │  3.  Request ID Generation (requestId.ts)                 │  │
+│  │  4.  Request Context — ALS scope (requestContext.ts)      │  │
+│  │  5.  Metrics Instrumentation (metrics.ts)                 │  │
+│  │  6.  Echo Route (/echo — benchmark only, no logging)      │  │
+│  │  7.  Request Logger (requestLogger.ts)                    │  │
+│  │  8.  CORS Handler (cors.ts)                               │  │
+│  │  9.  Health Routes (/health — exempt from rate limiting)  │  │
+│  │  10. Metrics Route (/metrics — optional token auth)       │  │
+│  │  11. Global Rate Limiter (rateLimiter.ts)                 │  │
+│  │  12. JSON Body Parser                                     │  │
+│  │  13. Route Handlers (per-route auth, validation, limits)  │  │
+│  │  14. 404 Handler                                          │  │
+│  │  15. Error Handler (errorHandler.ts)                      │  │
 │  └───────────────────────────────────────────────────────────┘  │
 ├─────────────────────────────────────────────────────────────────┤
 │                          Routes Layer                           │
@@ -165,7 +167,7 @@ Key Components:
 
 ### Core Functionality
 
-- **User Authentication**: JWT-based auth with secure password hashing (bcrypt, 10 salt rounds)
+- **User Authentication**: JWT-based auth with secure password hashing (bcrypt, 12 salt rounds)
 - **Todo Management**: Full CRUD operations with user isolation and cursor-based pagination (limit/cursor, default 20, max 100)
 - **Input Validation**: Comprehensive Joi-based validation on all endpoints
 - **Rate Limiting**: Multi-tiered protection (global, auth, read, write) with optional Redis-backed distributed rate limiting via `REDIS_URL`
@@ -205,18 +207,20 @@ Key Components:
 
 ## Technology Stack
 
-- **TypeScript** 5.9.3 (strict mode, ES Modules)
+- **TypeScript** 6.0.3 (strict mode, ES Modules)
 - **Node.js** 24+ + **Express** 5.2.1
-- **PostgreSQL** + **Prisma ORM** 7.2.0
+- **PostgreSQL** + **Prisma ORM** 7.8.0
 - **Authentication**: jsonwebtoken 9.0.3, bcrypt 6.0.0
-- **Validation**: joi 18.0.2, validator 13.15.26, envalid 8.1.1
-- **Logging**: pino 10.1.0, pino-pretty 13.1.3
-- **Database Driver**: pg 8.16.3, @prisma/adapter-pg 7.2.0
-- **Rate Limiting**: express-rate-limit 8.2.1, rate-limit-redis (optional Redis store)
+- **Security Headers**: helmet 8.x
+- **Validation**: joi 18.2.3, envalid 8.2.0
+- **Logging**: pino 10.3.1, pino-pretty 13.1.3
+- **Database Driver**: pg 8.22.0, @prisma/adapter-pg 7.8.0
+- **Rate Limiting**: express-rate-limit 8.5.2, rate-limit-redis 5.x (optional Redis store)
 - **Metrics**: prom-client 15.1.3 (Prometheus-compatible process and application metrics)
-- **CORS**: cors 2.8.5 (origin validation, preflight handling)
-- **Testing**: Jest 29.7.0, Supertest 7.1.4, ts-jest 29.4.6
-- **Development**: tsx 4.21.0 (hot reload via `tsx watch`)
+- **CORS**: cors 2.8.6 (origin validation, preflight handling)
+- **IDs**: uuid 14.0.1
+- **Testing**: Jest 30.4.2, Supertest 7.2.2, ts-jest 29.4.11
+- **Development**: tsx 4.23.0 (hot reload via `tsx watch`)
 
 ## Configuration
 
@@ -238,7 +242,8 @@ See [`docs/configuration.md`](docs/configuration.md) for the full reference incl
 
 ### Implemented Measures
 
-- Bcrypt password hashing with 10 salt rounds
+- Bcrypt password hashing with 12 salt rounds
+- Secure HTTP response headers via Helmet
 - JWT tokens with 24-hour expiration
 - Multi-tiered rate limiting (global + endpoint-specific)
 - Comprehensive input validation (Joi schemas)
@@ -304,18 +309,19 @@ See [`docs/testing.md`](docs/testing.md) for the full guide including test struc
 
 Base URL: `http://localhost:3001` -- full documentation in [`docs/api.md`](docs/api.md).
 
-| Method     | Path             | Auth  | Description            |
-| ---------- | ---------------- | ----- | ---------------------- |
-| **POST**   | `/auth/register` | No    | Create account         |
-| **POST**   | `/auth/login`    | No    | Get JWT token          |
-| **GET**    | `/todos`         | Yes   | List todos (paginated) |
-| **POST**   | `/todos`         | Yes   | Create todo            |
-| **GET**    | `/todos/:id`     | Yes   | Get single todo        |
-| **PATCH**  | `/todos/:id`     | Yes   | Toggle done status     |
-| **DELETE** | `/todos/:id`     | Yes   | Delete todo            |
-| **GET**    | `/health`        | No    | Liveness probe         |
-| **GET**    | `/health/ready`  | No    | Readiness probe        |
-| **GET**    | `/metrics`       | Token | Prometheus metrics     |
+| Method     | Path                     | Auth  | Description                          |
+| ---------- | ------------------------ | ----- | ------------------------------------ |
+| **POST**   | `/auth/register`         | No    | Create account                       |
+| **POST**   | `/auth/login`            | No    | Get JWT token                        |
+| **GET**    | `/todos`                 | Yes   | List todos (paginated)               |
+| **POST**   | `/todos`                 | Yes   | Create todo                          |
+| **GET**    | `/todos/:id`             | Yes   | Get single todo                      |
+| **PATCH**  | `/todos/:id`             | Yes   | Toggle done status                   |
+| **DELETE** | `/todos/:id`             | Yes   | Delete todo                          |
+| **GET**    | `/health`                | No    | Liveness probe                       |
+| **GET**    | `/health/ready`          | No    | Readiness probe                      |
+| **GET**    | `/health/ready/detailed` | Token | Detailed readiness (memory/CPU/pool) |
+| **GET**    | `/metrics`               | Token | Prometheus metrics                   |
 
 ## Project Structure
 
@@ -369,6 +375,10 @@ todo-api/
 │   ├── migrations/            # Database migrations (incl. 20260526000001_add_audit_entries)
 │   └── sql/
 │       └── bootstrap_roles.sql # Creates db_admin / db_app / db_auditor + default privileges
+├── scripts/                    # Operational scripts
+│   └── preflight-roles.ts     # Pre-deploy DB role/privilege verification
+├── docker/
+│   └── timescaledb/           # Custom TimescaleDB + pgBackRest image and backup scripts
 ├── logs/                       # Log files (generated)
 ├── dist/                       # Compiled JavaScript (generated)
 ├── tsconfig.json              # TypeScript configuration
@@ -377,6 +387,7 @@ todo-api/
 ├── Dockerfile                 # Multi-stage Docker build (tsc compilation + compiled JS runtime)
 ├── .dockerignore              # Docker build context exclusions
 ├── docker-compose.yml         # Full stack: Postgres, Redis, app
+├── railway.json               # Railway deploy config (pre-deploy migrations)
 ├── benchmarks/                 # Load testing infrastructure
 │   ├── k6/                    # k6 benchmark scripts
 │   ├── seed.ts                # Benchmark database seeding
@@ -390,7 +401,10 @@ todo-api/
 │   ├── api.md                     # Full API endpoint reference
 │   ├── benchmarks.md              # Benchmark methodology and reproduction
 │   ├── configuration.md           # Environment variables and CORS setup
+│   ├── databases.md               # Audit-log (TimescaleDB) and search design memo
 │   ├── docker.md                  # Docker setup, commands, production config
+│   ├── operations.md              # Deploy/DB runbooks (role bootstrap, P3009 recovery)
+│   ├── pgbackrest-implementation.md # pgBackRest backup and disaster-recovery guide
 │   ├── runtime-correctness.md     # Production runtime correctness plan
 │   └── testing.md                 # Test framework, helpers, writing tests
 ├── eslint.config.js           # ESLint configuration

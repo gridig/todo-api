@@ -1,9 +1,13 @@
 import 'dotenv/config';
 import prisma from '@/lib/prisma.js';
+import { blindIndex } from '@/lib/crypto/fieldCrypto.js';
 
 const run = async () => {
+  // email is ciphertext now; look up (and EXPLAIN) by the blind index — the
+  // real login lookup path — not the plaintext address.
+  const emailHash = blindIndex('benchuser0@example.com');
   const user = await prisma.user.findFirst({
-    where: { email: 'benchuser0@example.com' },
+    where: { emailHash },
   });
 
   if (!user) {
@@ -32,9 +36,9 @@ const run = async () => {
         prisma.$queryRaw`EXPLAIN ANALYZE SELECT * FROM todos WHERE id = ${todo.id} AND user_id = ${user.id} LIMIT 1`,
     },
     {
-      name: 'findByEmail (login)',
+      name: 'findByEmail (login, blind index)',
       fn: () =>
-        prisma.$queryRaw`EXPLAIN ANALYZE SELECT * FROM users WHERE email = ${user.email} LIMIT 1`,
+        prisma.$queryRaw`EXPLAIN ANALYZE SELECT * FROM users WHERE email_hash = ${emailHash} LIMIT 1`,
     },
   ];
 

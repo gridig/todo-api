@@ -11,13 +11,15 @@ jest.unstable_mockModule('@/config/env.js', () => ({
     NODE_ENV: 'test',
     REDIS_URL: 'redis://localhost:6379',
     DISABLE_RATE_LIMIT: false,
+    // rateLimiter → fieldCrypto → keyProvider builds EnvKeyProvider(env) at load.
+    ENCRYPTION_KEYRING: 'k1:xUDmpBXSU0GOwiXb21JUx+TmbrLCvRq2H/FnzNHpa8k=',
+    ENCRYPTION_ACTIVE_KEY_ID: 'k1',
+    ENCRYPTION_BLIND_INDEX_KEY: '77aSVJcRkCMYdHdn/ZgEUhWU035vPNWcvuPPbAgN1/Y=',
   },
 }));
 
 const mockOn = jest.fn();
-const mockConnect = jest
-  .fn<() => Promise<void>>()
-  .mockRejectedValue(new Error('ECONNREFUSED'));
+const mockConnect = jest.fn<() => Promise<void>>().mockRejectedValue(new Error('ECONNREFUSED'));
 
 jest.unstable_mockModule('redis', () => ({
   createClient: jest.fn(() => ({
@@ -33,9 +35,7 @@ jest.unstable_mockModule('redis', () => ({
 jest.unstable_mockModule('rate-limit-redis', () => ({
   RedisStore: class DeadRedisStore {
     init = jest.fn();
-    increment = jest
-      .fn<() => Promise<never>>()
-      .mockRejectedValue(new Error('Redis unavailable'));
+    increment = jest.fn<() => Promise<never>>().mockRejectedValue(new Error('Redis unavailable'));
     decrement = jest.fn<() => Promise<never>>().mockRejectedValue(new Error('Redis unavailable'));
     resetKey = jest.fn<() => Promise<never>>().mockRejectedValue(new Error('Redis unavailable'));
   },

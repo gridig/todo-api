@@ -123,10 +123,85 @@ none of them, so schema-diffing tools will try to "fix" the difference:
   against `schema.prisma` and will drop the indexes and can desync the REVOKE.
 - **Always create migrations with `prisma migrate dev --create-only`** and hand-review the generated
   SQL before applying. Delete any generated statement that touches `audit_entries` (`DROP INDEX
-  idx_audit_*`, `ALTER TABLE audit_entries …`) unless the change is deliberate.
+idx_audit_*`, `ALTER TABLE audit_entries …`) unless the change is deliberate.
 
 A guard test (`__tests__/unit/migrations-guard.test.ts`) fails CI if a committed migration contains
 such statements — that is the enforcement point; this section is the explanation.
+
+## Field encryption key management & rotation
+
+The `users.email` PII column is encrypted at the application layer (SOC 2 CC6.1 / C1.1). Design
+overview: [configuration.md → Encryption at rest](configuration.md#encryption-at-rest). This section
+is the operational runbook.
+
+### Keys and custody
+
+Three env vars, held as **Railway per-environment secrets** (never committed; distinct values for
+`staging` and `production`):
+
+- `ENCRYPTION_KEYRING` — `<keyId>:<base64-32-byte-key>` entries. The keyring can hold several keys at
+  once; each ciphertext embeds the keyId it was written with.
+- `ENCRYPTION_ACTIVE_KEY_ID` — the keyId new writes use.
+- `ENCRYPTION_BLIND_INDEX_KEY` — the HMAC key behind `users.email_hash`.
+
+Generate any key with `node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"`.
+Access is governed by Railway's secret-access controls.
+
+> **CC6.2 read-side-audit gap (accepted).** Env-var secret stores (Railway) encrypt secrets at rest
+> and gate access, but do **not** log _who read a key and when_. A managed KMS (AWS KMS, Vault) would
+> close that read-side audit gap. It is deferred: the `KeyProvider` interface (`src/lib/crypto/keyProvider.ts`)
+> lets a KMS backend drop in later with no call-site changes. Review key access as part of the
+> quarterly access review until then. Tracked under the Secrets Management roadmap item.
+
+> **A bad keyring is a login outage.** If `ENCRYPTION_ACTIVE_KEY_ID` is missing from the ring, or a
+> retired key still referenced by stored ciphertext is dropped, boot fails (active-key check) or
+> `findByEmail` decrypt throws (`UnknownKeyIdError`). Retire a key only after a re-encryption sweep
+> (below) confirms no rows reference it.
+
+### Initial rollout (migrations + backfill)
+
+Three migrations stage the change (`20260709000001`/`_2`/`_3`). The key material must never appear in
+migration SQL (it would leak into `db_admin` logs), so the data transform is
+[`scripts/backfill-email-crypto.ts`](../scripts/backfill-email-crypto.ts), run as an operator with the
+app env present (it connects via `DATABASE_MIGRATE_URL`).
+
+**Empty database (current production):** `users` is empty (verify `SELECT count(*) FROM users` = 0), so
+`prisma migrate deploy` applies all three migrations in one step and the backfill phases are no-ops.
+Nothing else to do.
+
+**Populated database (zero-downtime):**
+
+1. Apply migration `..._add_email_hash` (adds nullable `email_hash`).
+2. `node dist/scripts/backfill-email-crypto.js --phase=hash` — populates `email_hash` from the current
+   plaintext email. Collision-checked (fails closed).
+3. Apply migration `..._email_hash_unique` **with the app deploy that reads by blind index** (NOT NULL
+   - `UNIQUE`). For a large table, swap the in-migration `SET NOT NULL` / `CREATE UNIQUE INDEX` for the
+     `CHECK … NOT VALID` → `VALIDATE` and `CREATE UNIQUE INDEX CONCURRENTLY` variants noted in the
+     migration SQL (`CONCURRENTLY` can't run inside Prisma's migration transaction).
+4. `node dist/scripts/backfill-email-crypto.js --phase=encrypt` — encrypts remaining plaintext rows.
+5. Apply migration `..._drop_email_unique` (drops the old plaintext unique index).
+
+Use `--dry-run` to preview counts; `--batch=<n>` to tune batch size.
+
+### Rotating the ciphertext key (lazy, low-risk)
+
+Old ciphertext keeps its embedded keyId, so old and new keys coexist:
+
+1. Add a new key to `ENCRYPTION_KEYRING` (keep the old one).
+2. Point `ENCRYPTION_ACTIVE_KEY_ID` at the new keyId and deploy — new writes use it immediately.
+3. Re-encrypt existing rows to the active key: `node dist/scripts/backfill-email-crypto.js --phase=encrypt`
+   (it also re-encrypts rows whose keyId ≠ active).
+4. After the sweep, remove the old key from the keyring.
+
+### Rotating the blind-index (HMAC) key (eager, coordinated)
+
+`email_hash` must be a single deterministic value per row, so this key cannot rotate lazily — changing
+it invalidates every lookup until all rows are re-hashed. Do it in a maintenance window:
+
+1. Set the new `ENCRYPTION_BLIND_INDEX_KEY`.
+2. Immediately run `node dist/scripts/backfill-email-crypto.js --phase=rehash` — it decrypts each email
+   and recomputes `email_hash` with the new key (collision-checked). Logins that land mid-run miss until
+   their row is rehashed, hence the maintenance window. Rotate this key rarely.
 
 ## Database restore (disaster recovery)
 
@@ -211,12 +286,12 @@ practical path.)
      `railway`, not `postgres`); without it the post-restore scheduler logs harmless but noisy
      `role "postgres" does not exist` on its backup attempts;
    - Stamp the start time (`date -u`) — the RTO clock starts at the deploy trigger.
-   Build with `railway up docker/timescaledb --path-as-root --ci --service timescaledb-drill`
-   (`--path-as-root` is load-bearing — else it builds the app's root Dockerfile onto the service).
+     Build with `railway up docker/timescaledb --path-as-root --ci --service timescaledb-drill`
+     (`--path-as-root` is load-bearing — else it builds the app's root Dockerfile onto the service).
 4. **Deploy and watch logs:** expect `=== RESTORE MODE: restoring 'todo-api' ...`, then Postgres start
-   + WAL replay (`restored log file ...`), then `database system is ready to accept connections`
-   (the image is `PostgreSQL 16` — if you see `PostgreSQL 18` / `wrapper:` lines it's Railway's managed
-   image, not ours).
+   - WAL replay (`restored log file ...`), then `database system is ready to accept connections`
+     (the image is `PostgreSQL 16` — if you see `PostgreSQL 18` / `wrapper:` lines it's Railway's managed
+     image, not ours).
 5. **Verify data + immutability** (via `railway ssh --service timescaledb-drill "psql -U railway -d railway -c '...'"`):
    - `\du` — `db_admin`, `db_app`, `db_auditor` present (roles restored physically).
    - `\dt` — `users`, `todos`, `audit_entries`, `_prisma_migrations` present.

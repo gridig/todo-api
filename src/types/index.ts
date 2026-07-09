@@ -5,12 +5,17 @@ import { Logger } from 'pino';
 
 export interface User {
   id: string;
+  // At the service boundary `email` is always plaintext (create/findByEmail
+  // decrypt before returning); at rest the column holds AES-256-GCM ciphertext.
   email: string;
+  // Keyed HMAC blind index over the canonical email — the lookup/uniqueness key.
+  emailHash: string;
   password: string;
   createdAt: Date;
   updatedAt: Date;
 }
 
+// findByEmail returns only these three; email is decrypted, emailHash omitted.
 export type UserLoginFields = Pick<User, 'id' | 'email' | 'password'>;
 
 export interface Todo {

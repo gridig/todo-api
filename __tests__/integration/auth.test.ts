@@ -4,6 +4,8 @@ import jwt from 'jsonwebtoken';
 import UserService from '@/models/User.js';
 import prisma from '@/lib/prisma.js';
 import { env } from '@/config/env.js';
+import { encryptField, blindIndex } from '@/lib/crypto/fieldCrypto.js';
+import { normalizeEmail } from '@/lib/normalizeEmail.js';
 import { createTestApp, connectTestDB, disconnectTestDB } from '../helpers/testSetup.js';
 import { jest } from '@jest/globals';
 
@@ -35,6 +37,16 @@ describe('Authentication Endpoints', () => {
 
       expect(response.status).toBe(201);
       expect(response.body.token).toBeDefined();
+
+      // Encryption-at-rest: the stored email column is AES-256-GCM ciphertext,
+      // never the plaintext address; the blind index carries the lookup.
+      const stored = await prisma.user.findUnique({
+        where: { emailHash: blindIndex('test@example.com') },
+        select: { email: true },
+      });
+      expect(stored).not.toBeNull();
+      expect(stored!.email.startsWith('enc:1:')).toBe(true);
+      expect(stored!.email).not.toContain('test@example.com');
     });
 
     it('should reject weak password', async () => {
@@ -217,12 +229,18 @@ describe('Authentication Endpoints', () => {
     it('rehashes a legacy cost-10 password on next successful login', async () => {
       // Pre-create the user via Prisma with a cost-10 hash, bypassing
       // UserService.create (which would already hash at the current
-      // SALT_ROUNDS). Then login and confirm the stored hash upgraded.
+      // SALT_ROUNDS). Email/emailHash still go through the field-crypto helpers
+      // so the login-by-blind-index lookup can find the row. Then login and
+      // confirm the stored hash upgraded.
       const email = `rehash-${Date.now()}@example.com`;
       const password = 'TestPass123!';
       const legacyHash = await bcrypt.hash(password, 10);
       const user = await prisma.user.create({
-        data: { email, password: legacyHash },
+        data: {
+          email: encryptField(normalizeEmail(email)),
+          emailHash: blindIndex(email),
+          password: legacyHash,
+        },
         select: { id: true, password: true },
       });
       expect(bcrypt.getRounds(user.password)).toBe(10);

@@ -6,9 +6,9 @@ This guide covers the test framework, structure, helper utilities, database setu
 
 | Component     | Tool                                      |
 | ------------- | ----------------------------------------- |
-| Framework     | Jest 29.7.0                               |
+| Framework     | Jest 30.4.2                               |
 | TypeScript    | ts-jest with ESM support                  |
-| HTTP testing  | Supertest 7.1.4                           |
+| HTTP testing  | Supertest 7.2.2                           |
 | Database      | PostgreSQL with Prisma (isolated test DB) |
 | Module system | ES Modules (`--experimental-vm-modules`)  |
 
@@ -251,11 +251,11 @@ The `test:ci` script is designed for CI pipelines:
 
 ```bash
 pnpm run test:ci
-# Equivalent to: jest --ci --coverage --maxWorkers=2
+# Equivalent to: jest --ci --coverage
 ```
 
 - `--ci` -- Fails if snapshots are out of date (no interactive update)
 - `--coverage` -- Generates coverage report and enforces thresholds
-- `--maxWorkers=2` -- Limits parallelism for CI resource constraints
+- Parallelism is fixed at `maxWorkers: 1` via `jest.config.ts` (see above), so tests run serially against the shared database
 
 Ensure the CI environment has a PostgreSQL instance available and a `.env.test` with valid `DATABASE_URL`.

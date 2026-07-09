@@ -1,7 +1,7 @@
 import request from 'supertest';
 import jwt from 'jsonwebtoken';
-import { createHash } from 'node:crypto';
 import { jest } from '@jest/globals';
+import { blindIndex } from '@/lib/crypto/fieldCrypto.js';
 import UserService from '@/models/User.js';
 import TodoService from '@/models/Todo.js';
 import auditLog from '@/lib/auditLog.js';
@@ -36,9 +36,6 @@ interface AuditRow {
   metadata: unknown;
 }
 
-const hashEmail = (email: string): string =>
-  createHash('sha256').update(email.toLowerCase().trim()).digest('hex');
-
 beforeAll(async () => {
   await connectTestDB();
 });
@@ -67,7 +64,9 @@ describe('Audit log — auth emissions', () => {
     expect(row!.entity_type).toBe('User');
     expect(row!.entity_id).toBeTruthy();
     expect(row!.changed_by).toBe(row!.entity_id);
-    expect((row!.new_value as { email: string }).email).toBe(email.toLowerCase());
+    // Register audit stores the blind-index hash, never the raw address.
+    expect((row!.new_value as { emailHash: string }).emailHash).toBe(blindIndex(email));
+    expect(JSON.stringify(row!.new_value)).not.toContain(email);
     expect(row!.request_id).toBeTruthy();
   });
 
@@ -102,7 +101,7 @@ describe('Audit log — auth emissions', () => {
     expect(row!.outcome_reason).toBe('invalid-credentials');
     expect(row!.changed_by).toBeNull();
     const md = row!.metadata as { emailHash: string };
-    expect(md.emailHash).toBe(hashEmail(email));
+    expect(md.emailHash).toBe(blindIndex(email));
     // PII guard: the audit row must never carry the raw email.
     expect(JSON.stringify(row!.metadata)).not.toContain(email);
   });
@@ -199,7 +198,7 @@ describe('Audit log — todo mutations', () => {
 });
 
 describe('Audit log — cross-user access denials', () => {
-  it('emits AccessDenied when user A GETs user B\'s todo', async () => {
+  it("emits AccessDenied when user A GETs user B's todo", async () => {
     const userA = await createTestUser();
     const userB = await createTestUser();
     const todoB = await TodoService.create({ text: 'B owns me', userId: userB.userId });
@@ -218,7 +217,7 @@ describe('Audit log — cross-user access denials', () => {
     expect(row!.entity_type).toBe('Todo');
   });
 
-  it('emits AccessDenied when user A toggles user B\'s todo', async () => {
+  it("emits AccessDenied when user A toggles user B's todo", async () => {
     const userA = await createTestUser();
     const userB = await createTestUser();
     const todoB = await TodoService.create({ text: 'B owns me', userId: userB.userId });
@@ -235,7 +234,7 @@ describe('Audit log — cross-user access denials', () => {
     expect(row).not.toBeNull();
   });
 
-  it('emits AccessDenied when user A deletes user B\'s todo', async () => {
+  it("emits AccessDenied when user A deletes user B's todo", async () => {
     const userA = await createTestUser();
     const userB = await createTestUser();
     const todoB = await TodoService.create({ text: 'B owns me', userId: userB.userId });
@@ -263,9 +262,9 @@ describe('Audit log — tamper-evidence & rollback', () => {
   });
 
   it('rejects DELETE on audit_entries from the app pool', async () => {
-    await expect(
-      prisma.$executeRaw`DELETE FROM audit_entries WHERE FALSE`,
-    ).rejects.toThrow(/permission denied/i);
+    await expect(prisma.$executeRaw`DELETE FROM audit_entries WHERE FALSE`).rejects.toThrow(
+      /permission denied/i,
+    );
   });
 
   it('rolls back the parent mutation when the audit insert throws', async () => {
