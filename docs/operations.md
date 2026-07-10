@@ -35,14 +35,27 @@ so **these roles must exist before the first `prisma migrate deploy`.**
 
 ### Deploy preflight & migrations (Railway pre-deploy command)
 
-Migrations do **not** run in the app container's start command. Railway runs
-[`scripts/preflight-roles.ts`](../scripts/preflight-roles.ts) then `prisma migrate deploy` as the
-**pre-deploy command** (`railway.json` → `deploy.preDeployCommand`) — once per deploy, in the built
-image with the service env + private network, before the new version goes live. The preflight connects
-via `DATABASE_MIGRATE_URL` (falling back to `DATABASE_URL`) and exits non-zero if
-`db_admin`/`db_app`/`db_auditor` are missing. Because a failed pre-deploy command aborts the deploy and
-keeps the previous version serving, a missing role or broken migration produces one legible failure
-instead of crash-looping the app.
+Migrations do **not** run in the app container's start command. Railway runs a single pre-deploy
+entrypoint — [`scripts/predeploy.ts`](../scripts/predeploy.ts) (`node dist/scripts/predeploy.js`, wired
+in `railway.json` → `deploy.preDeployCommand`) — once per deploy, in the built image with the service
+env + private network, before the new version goes live. It runs three gates in order, each aborting the
+deploy (non-zero exit → Railway keeps the previous version serving) on failure:
+
+1. **Roles present** — [`runPreflight`](../scripts/preflight-roles.ts) connects via `DATABASE_MIGRATE_URL`
+   (falling back to `DATABASE_URL`) and exits non-zero if `db_admin`/`db_app`/`db_auditor` are missing.
+2. **`prisma migrate deploy`** — apply pending migrations.
+3. **`prisma migrate status`** — assert the schema is fully up to date. This is the gate that guarantees a
+   release can never go live against an unmigrated database (the 2026-07-10 incident: a build shipped with
+   its migrations unapplied, so every register/login 500'd against the missing `email_hash` column). The
+   three steps run in one Node process with explicit exit codes rather than a chained `A && B` shell
+   string, so the migrate/verify gate can't be silently skipped.
+
+**Multi-phase (expand → backfill → contract) migrations** — e.g. the email-encryption rollout — require an
+operator-run data backfill *between* migrations that `prisma migrate deploy` cannot perform, so step 2
+fails and **correctly blocks auto-deploy**. Roll them out manually: apply the expand migration, run the
+backfill (`node dist/scripts/backfill-email-crypto.js --phase=…`), then apply the enforce/contract
+migrations (see "Field encryption key management & rotation" below), and only then redeploy. Do **not**
+expect these to ship via a plain push-to-`main`.
 
 Transient connection/query failures are retried with decorrelated-jitter backoff — Railway's
 `*.railway.internal` private networking can take a few seconds to come up in a fresh pre-deploy
