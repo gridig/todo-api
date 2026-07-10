@@ -53,33 +53,40 @@ export async function startServer() {
     }
     logger.info({ timescaledbVersion: ext[0]?.extversion }, 'TimescaleDB extension verified');
 
-    // Tamper-evidence smoke probe: a successful UPDATE on audit_entries from
-    // the runtime role means the REVOKE was lost (bad migration, accidental
-    // GRANT, wrong DSN). DB_PLAN §8 originally placed this in deploy.yml; doing
-    // it at boot covers every environment (dev/CI/staging/prod), avoids
-    // duplicating the db_app DSN into a GitHub Actions secret, and turns a
-    // failing probe into a refused-to-boot signal the orchestrator already
-    // knows how to handle. WHERE FALSE keeps it free of side effects even
-    // if the REVOKE is mistakenly absent.
-    try {
-      await prisma.$executeRaw`UPDATE audit_entries SET action = 'probe' WHERE FALSE`;
+    // Tamper-evidence probe: the runtime role (db_app) must NOT hold UPDATE on
+    // audit_entries — that REVOKE is the SOC 2 append-only guarantee. DB_PLAN §8
+    // originally placed this in deploy.yml; doing it at boot covers every
+    // environment (dev/CI/staging/prod), avoids duplicating the db_app DSN into a
+    // GitHub Actions secret, and turns a failing probe into a refused-to-boot
+    // signal the orchestrator already handles.
+    //
+    // We assert the privilege is absent via the catalog rather than attempting a
+    // forbidden UPDATE. An actual UPDATE is denied with 42501, which Prisma emits
+    // as a `prisma:error` line on every boot — benign, but it pages on-call when a
+    // log aggregator alerts on `prisma:error`. has_table_privilege reports the same
+    // grant state with no error, and still returns true for a superuser, so it
+    // also catches a DATABASE_URL wrongly pointing at the superuser. Any failure of
+    // the query itself (e.g. missing table) propagates and refuses the boot.
+    const auditPrivRows = await prisma.$queryRaw<
+      { can_update: boolean }[]
+    >`SELECT has_table_privilege(current_user, 'audit_entries', 'UPDATE') AS can_update`;
+    const auditPriv = auditPrivRows[0];
+    if (!auditPriv) {
       throw new Error(
-        'AUDIT_TAMPER_PROBE_FAILED: UPDATE on audit_entries succeeded as the runtime role. ' +
+        'AUDIT_TAMPER_PROBE_INCONCLUSIVE: privilege probe returned no rows — refusing to boot.',
+      );
+    }
+    if (auditPriv.can_update) {
+      throw new Error(
+        'AUDIT_TAMPER_PROBE_FAILED: the runtime role holds UPDATE on audit_entries. ' +
           'The audit-log REVOKE is not in force — refusing to boot. ' +
           'Check that DATABASE_URL points to db_app (not the superuser) and that the ' +
           '20260526000001_add_audit_entries migration has applied.',
       );
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      if (message.startsWith('AUDIT_TAMPER_PROBE_FAILED')) throw err;
-      if (!/permission denied/i.test(message)) {
-        throw new Error(
-          `AUDIT_TAMPER_PROBE_INCONCLUSIVE: probe returned an unexpected error: ${message}`,
-          { cause: err },
-        );
-      }
-      logger.info('Audit-log tamper-evidence probe passed (UPDATE denied as expected)');
     }
+    logger.info(
+      'Audit-log tamper-evidence probe passed (runtime role lacks UPDATE on audit_entries)',
+    );
 
     // Periodic pool snapshot for log-aggregator alerting. Dev gets the same
     // data on demand via /health/ready, so the interval is prod-only.
