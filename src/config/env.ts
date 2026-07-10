@@ -10,6 +10,73 @@ const jwtSecret = makeValidator<string>((value) => {
   return value;
 });
 
+// Field-encryption key material (see lib/crypto/*). AES-256 and HMAC-SHA256
+// both take a 32-byte key. Keys travel as base64 in env vars (Railway per-env
+// secrets) — the same trust model as JWT_SECRET and PGBACKREST_CIPHER_PASS.
+const ENCRYPTION_KEY_BYTES = 32;
+// keyId charset deliberately excludes ':' — the ciphertext envelope
+// (enc:1:<keyId>:...) and the keyring entries (<keyId>:<key>) both split on ':'.
+const ENCRYPTION_KEY_ID_PATTERN = /^[A-Za-z0-9_-]{1,32}$/;
+
+// The committed dev/test placeholder (32 zero bytes). Real per-environment keys
+// must replace it; assertProductionEnv() refuses to boot production on it.
+export const ENCRYPTION_DEV_PLACEHOLDER_KEY = Buffer.alloc(ENCRYPTION_KEY_BYTES, 0).toString(
+  'base64',
+);
+
+const decodeEncryptionKey = (value: string, label: string): void => {
+  const buf = Buffer.from(value, 'base64');
+  if (buf.length !== ENCRYPTION_KEY_BYTES) {
+    throw new Error(`${label} must be a base64-encoded ${ENCRYPTION_KEY_BYTES}-byte key`);
+  }
+};
+
+// Comma-separated `<keyId>:<base64-32-byte-key>` entries. Validated here so a
+// malformed keyring fails at boot, not at the first encrypt/decrypt. The raw
+// string is returned; lib/crypto/keyProvider.ts parses it once into a Map.
+const encryptionKeyring = makeValidator<string>((value) => {
+  if (typeof value !== 'string' || value.trim() === '') {
+    throw new Error(
+      'ENCRYPTION_KEYRING must be a non-empty comma-separated list of <keyId>:<base64-32-byte-key>',
+    );
+  }
+  const entries = value
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+  if (entries.length === 0) {
+    throw new Error('ENCRYPTION_KEYRING must contain at least one <keyId>:<key> entry');
+  }
+  const seen = new Set<string>();
+  for (const entry of entries) {
+    const sep = entry.indexOf(':');
+    if (sep === -1) {
+      throw new Error(`ENCRYPTION_KEYRING entry "${entry}" must be <keyId>:<base64-key>`);
+    }
+    const keyId = entry.slice(0, sep);
+    const keyB64 = entry.slice(sep + 1);
+    if (!ENCRYPTION_KEY_ID_PATTERN.test(keyId)) {
+      throw new Error(
+        `ENCRYPTION_KEYRING keyId "${keyId}" must match ${String(ENCRYPTION_KEY_ID_PATTERN)}`,
+      );
+    }
+    if (seen.has(keyId)) {
+      throw new Error(`ENCRYPTION_KEYRING has a duplicate keyId "${keyId}"`);
+    }
+    seen.add(keyId);
+    decodeEncryptionKey(keyB64, `ENCRYPTION_KEYRING key for "${keyId}"`);
+  }
+  return value;
+});
+
+const base64Key32 = makeValidator<string>((value) => {
+  if (typeof value !== 'string') {
+    throw new Error(`must be a base64-encoded ${ENCRYPTION_KEY_BYTES}-byte key`);
+  }
+  decodeEncryptionKey(value, 'key');
+  return value;
+});
+
 // Load .env file before validation
 // In test environment, setup.js handles this
 if (process.env.NODE_ENV !== 'test') {
@@ -64,9 +131,23 @@ export const env = cleanEnv(process.env, {
     desc: 'JWT `aud` claim. Set both sign and verify sides to the same value.',
   }),
 
-  JWT_VERIFY_REQUIRE_CLAIMS: bool({
-    default: false,
-    desc: 'When true, jwt.verify rejects tokens lacking iss/aud claims. Flip to true at least one full 24h-expiry window after the rollout deploy so legacy tokens have aged out. Until then, verify accepts both legacy { userId } and new { sub, iss, aud } payloads.',
+  // Field-level encryption (see docs/configuration.md → "Encryption at rest").
+  // All three are required in every environment (like JWT_SECRET) so the app
+  // never silently starts without a key. Dev/test use the committed placeholder
+  // from .env.example / .env.test; production must supply real per-env secrets.
+  ENCRYPTION_KEYRING: encryptionKeyring({
+    desc: 'Comma-separated <keyId>:<base64-32-byte-key> entries. New writes use ENCRYPTION_ACTIVE_KEY_ID; old ciphertext decrypts with whichever keyId it embeds, so keep retired keys here until re-encryption drains them.',
+    example: 'k1:BASE64_32_BYTE_KEY,k2:BASE64_32_BYTE_KEY',
+  }),
+
+  ENCRYPTION_ACTIVE_KEY_ID: str({
+    desc: 'keyId (must exist in ENCRYPTION_KEYRING) used to encrypt new values. Rotating = add a new key to the ring and point this at it.',
+    example: 'k1',
+  }),
+
+  ENCRYPTION_BLIND_INDEX_KEY: base64Key32({
+    desc: 'base64-encoded 32-byte HMAC-SHA256 key for the email blind index (deterministic lookup/uniqueness column). Rotating this requires a full re-hash of users.email_hash — see docs/operations.md.',
+    example: 'BASE64_32_BYTE_KEY',
   }),
 
   // CORS Configuration
@@ -260,6 +341,8 @@ export interface ProductionAssertionInput {
   ENABLE_ECHO_ROUTES_PRODUCTION_CONFIRM: boolean;
   CORS_ORIGIN: string;
   CORS_CREDENTIALS: string;
+  ENCRYPTION_KEYRING: string;
+  ENCRYPTION_BLIND_INDEX_KEY: string;
 }
 
 export interface ProductionAssertionResult {
@@ -299,6 +382,20 @@ export function assertProductionEnv(cfg: ProductionAssertionInput): ProductionAs
   } else if (cfg.ENABLE_ECHO_ROUTES && cfg.ENABLE_ECHO_ROUTES_PRODUCTION_CONFIRM) {
     warnings.push(
       'ENABLE_ECHO_ROUTES=true in production with CONFIRM. /echo bypasses logging and rate limiting — this process must not serve real traffic.',
+    );
+  }
+  // The committed dev/test placeholder key must never protect production PII.
+  if (!cfg.ENCRYPTION_KEYRING || cfg.ENCRYPTION_KEYRING.includes(ENCRYPTION_DEV_PLACEHOLDER_KEY)) {
+    errors.push(
+      'ENCRYPTION_KEYRING must be real per-environment key material in production (the committed dev placeholder key is rejected)',
+    );
+  }
+  if (
+    !cfg.ENCRYPTION_BLIND_INDEX_KEY ||
+    cfg.ENCRYPTION_BLIND_INDEX_KEY === ENCRYPTION_DEV_PLACEHOLDER_KEY
+  ) {
+    errors.push(
+      'ENCRYPTION_BLIND_INDEX_KEY must be real per-environment key material in production (the committed dev placeholder key is rejected)',
     );
   }
 

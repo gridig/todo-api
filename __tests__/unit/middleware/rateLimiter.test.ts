@@ -12,6 +12,7 @@ import {
   writeLimiter,
   healthLimiter,
 } from '@/middleware/rateLimiter.js';
+import { blindIndex } from '@/lib/crypto/fieldCrypto.js';
 
 describe('Rate Limiter Middleware', () => {
   /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -78,8 +79,12 @@ describe('Rate Limiter Middleware', () => {
   describe('loginEmailKey', () => {
     const asReq = (body: unknown): Request => ({ body }) as Request;
 
-    it('normalizes email to lowercase + trimmed', () => {
-      expect(loginEmailKey(asReq({ email: '  Test@EXAMPLE.com  ' }))).toBe('test@example.com');
+    it('returns the blind index of the canonical (lowercase + trimmed) email', () => {
+      // The rate-limit key never carries the raw address — it is the same keyed
+      // HMAC stored in users.email_hash, computed over the canonical form.
+      expect(loginEmailKey(asReq({ email: '  Test@EXAMPLE.com  ' }))).toBe(
+        blindIndex('test@example.com'),
+      );
     });
 
     it('returns "" when body is missing', () => {
@@ -128,26 +133,28 @@ describe('Rate Limiter Middleware', () => {
   describe('authLimiterKeyGenerator', () => {
     const asReq = (overrides: Partial<Request>): Request => ({ body: {}, ...overrides }) as Request;
 
-    it('composes the IPv4 IP with normalized email', () => {
+    it('composes the IPv4 IP with the blind-indexed email', () => {
       const key = authLimiterKeyGenerator(
         asReq({ ip: '203.0.113.7', body: { email: ' Foo@Example.com ' } }),
       );
-      expect(key).toBe('203.0.113.7:foo@example.com');
+      expect(key).toBe(`203.0.113.7:${blindIndex('foo@example.com')}`);
     });
 
     it('collapses IPv6 /64 via ipKeyGenerator (defeats /64-walking bypass)', () => {
       const key = authLimiterKeyGenerator(
         asReq({ ip: '2001:db8:abcd:1234::1', body: { email: 'a@b.com' } }),
       );
-      // Anything in the same /64 must produce the same prefix; we just
-      // check the email tail and that the prefix is non-trivial.
-      expect(key.endsWith(':a@b.com')).toBe(true);
-      expect(key.split(':a@')[0]?.length).toBeGreaterThan(0);
+      // Anything in the same /64 must produce the same prefix; we just check the
+      // blind-index email tail and that the prefix is non-trivial. base64 has no
+      // ':', so the last ':' cleanly separates the IP prefix from the hash.
+      const tail = `:${blindIndex('a@b.com')}`;
+      expect(key.endsWith(tail)).toBe(true);
+      expect(key.length).toBeGreaterThan(tail.length);
     });
 
     it('falls back to "unknown" when req.ip is undefined', () => {
       const key = authLimiterKeyGenerator(asReq({ ip: undefined, body: { email: 'x@y.com' } }));
-      expect(key).toBe('unknown:x@y.com');
+      expect(key).toBe(`unknown:${blindIndex('x@y.com')}`);
     });
 
     it('produces a stable key when email is missing (empty-key bucket)', () => {

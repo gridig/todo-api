@@ -1,6 +1,7 @@
 import Joi, { Schema } from 'joi';
 import type { Request, Response, NextFunction } from 'express';
 import { ValidationError, InvalidIdFormatError } from '../errors/index.js';
+import { normalizeEmail } from '../lib/normalizeEmail.js';
 
 export const validate = (schema: Schema) => {
   return (req: Request, res: Response, next: NextFunction): void => {
@@ -63,15 +64,15 @@ export const validateParams = (schema: Schema) => {
   };
 };
 
-// Canonical email schema — NFC + lowercase + trim. The same canonicalization
-// runs in middleware/rateLimiter.ts loginEmailKey and models/User.ts so the
-// rate-limit bucket, validated request, and stored row all key off the same
-// bytes — denies Unicode-variant evasion (NFC vs NFD, full-width, homoglyph).
+// Canonical email schema. Delegates the NFC + lowercase + trim transform to the
+// shared normalizeEmail helper so the validated request body, the per-email
+// rate-limit bucket (middleware/rateLimiter.ts), and the stored blind index
+// (models/User.ts) all key off the same bytes — denies Unicode-variant evasion
+// (NFC vs NFD, full-width, homoglyph).
 const emailSchema = Joi.string()
   .email()
   .trim()
-  .lowercase()
-  .custom((value: string) => value.normalize('NFC'))
+  .custom((value: string) => normalizeEmail(value))
   .max(72);
 
 export const schemas = {

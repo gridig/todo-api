@@ -15,11 +15,14 @@ The application uses `envalid` to validate all environment variables at startup,
 
 ## Required Variables
 
-| Variable               | Type   | Description                                                                                                                                                 | Example                                                      |
-| ---------------------- | ------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------ |
-| `DATABASE_URL`         | URL    | PostgreSQL connection string for the runtime app role (`db_app`). The audit-log REVOKE depends on this not being a superuser.                               | `postgresql://db_app:db_app_dev@localhost:5432/todo_api`     |
-| `DATABASE_MIGRATE_URL` | URL    | Optional admin DSN used **only** by `prisma migrate deploy` (`db_admin` — owns the schema, runs DDL + GRANT/REVOKE). Falls back to `DATABASE_URL` if unset. | `postgresql://db_admin:db_admin_dev@localhost:5432/todo_api` |
-| `JWT_SECRET`           | String | Secret key for JWT tokens. **Minimum 32 characters** — the server fails fast at startup if this is shorter.                                                 | `your-super-secret-jwt-key-min-32-chars`                     |
+| Variable                     | Type   | Description                                                                                                                                                                                             | Example                                                      |
+| ---------------------------- | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------ |
+| `DATABASE_URL`               | URL    | PostgreSQL connection string for the runtime app role (`db_app`). The audit-log REVOKE depends on this not being a superuser.                                                                           | `postgresql://db_app:db_app_dev@localhost:5432/todo_api`     |
+| `DATABASE_MIGRATE_URL`       | URL    | Optional admin DSN used **only** by `prisma migrate deploy` (`db_admin` — owns the schema, runs DDL + GRANT/REVOKE). Falls back to `DATABASE_URL` if unset.                                             | `postgresql://db_admin:db_admin_dev@localhost:5432/todo_api` |
+| `JWT_SECRET`                 | String | Secret key for JWT tokens. **Minimum 32 characters** — the server fails fast at startup if this is shorter.                                                                                             | `your-super-secret-jwt-key-min-32-chars`                     |
+| `ENCRYPTION_KEYRING`         | String | Comma-separated `<keyId>:<base64-32-byte-key>` entries for field encryption. New writes use `ENCRYPTION_ACTIVE_KEY_ID`; keep retired keys here until re-encryption drains them. Malformed → boot fails. | `k1:BASE64_32_BYTE_KEY,k2:BASE64_32_BYTE_KEY`                |
+| `ENCRYPTION_ACTIVE_KEY_ID`   | String | keyId (must exist in `ENCRYPTION_KEYRING`) used to encrypt new values.                                                                                                                                  | `k1`                                                         |
+| `ENCRYPTION_BLIND_INDEX_KEY` | String | base64-encoded 32-byte HMAC key for the email blind index (lookup/uniqueness). Rotating it requires re-hashing every row — see [operations.md](operations.md).                                          | `BASE64_32_BYTE_KEY`                                         |
 
 ### Database roles
 
@@ -38,6 +41,28 @@ Generate a secure JWT secret for production:
 ```bash
 node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 ```
+
+### Encryption at rest
+
+Three layers protect confidential data at rest (SOC 2 CC6.1 / C1.1):
+
+1. **Database volume** — the production database runs on a Railway-managed volume; Railway encrypts volume storage at rest at the platform layer. Transparent Data Encryption (TDE) is **not** available on the self-hosted `timescale/timescaledb` image (community PostgreSQL has no built-in TDE), so this platform-managed encryption plus the application-layer field encryption below are the controls of record.
+2. **Backups** — pgBackRest encrypts every base backup and archived WAL segment client-side with AES-256-CBC (`PGBACKREST_CIPHER_PASS`) before it lands in the Railway Bucket. See [Database Backups](#database-backups-pgbackrest).
+3. **Application-layer field encryption** — the `users.email` PII column is encrypted by the app, not stored in plaintext.
+
+**How field encryption works** (`src/lib/crypto/`):
+
+- `email` stores an **AES-256-GCM** ciphertext envelope: `enc:1:<keyId>:<iv>:<tag>:<ciphertext>` (all base64). The `enc:1:` prefix versions the scheme and lets a mixed plaintext/ciphertext table be read during a backfill.
+- Because GCM is randomized, the ciphertext can't back a `UNIQUE` constraint or an equality lookup. A second column, `email_hash`, holds a **keyed HMAC-SHA256 blind index** over the canonical (NFC + lowercase + trim) email. It carries the unique constraint and every `findByEmail` lookup — keyed (not a bare hash) so the column is not an offline-enumerable oracle.
+- Keys are supplied as env vars (Railway per-environment secrets) — the same trust model as `JWT_SECRET` and `PGBACKREST_CIPHER_PASS` — behind a `KeyProvider` interface so a managed KMS can be adopted later without touching call sites. Generate a key with:
+
+  ```bash
+  node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
+  ```
+
+- **Production refuses to boot** on the committed dev placeholder key (32 zero bytes) — `assertProductionEnv()` in `src/config/env.ts` rejects it. A malformed keyring or an `ENCRYPTION_ACTIVE_KEY_ID` absent from the ring also fails fast at startup.
+
+Key custody, rotation procedures, and the read-side audit (CC6.2) gap versus a managed KMS are documented in [operations.md → Field encryption key management & rotation](operations.md#field-encryption-key-management--rotation).
 
 ## Database Backups (pgBackRest)
 
@@ -73,10 +98,10 @@ build details: [pgbackrest-implementation.md](pgbackrest-implementation.md).
 
 ### Application
 
-| Variable      | Type   | Default       | Description                                                                                                                                                    |
-| ------------- | ------ | ------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `PORT`        | Port   | `3001`        | Server port number                                                                                                                                             |
-| `NODE_ENV`    | String | `development` | Environment (development/production/test)                                                                                                                      |
+| Variable      | Type   | Default       | Description                                                                                                                                                               |
+| ------------- | ------ | ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `PORT`        | Port   | `3001`        | Server port number                                                                                                                                                        |
+| `NODE_ENV`    | String | `development` | Environment (development/production/test)                                                                                                                                 |
 | `TRUST_PROXY` | Number | `1`           | Trusted proxy hop count (Express `trust proxy`). Railway / single LB = `1`; add one per extra fronting proxy. Too high lets clients spoof `req.ip` via `X-Forwarded-For`. |
 
 ### Logging
@@ -327,6 +352,13 @@ DATABASE_MIGRATE_URL=postgresql://db_admin:db_admin_dev@localhost:5432/todo_api
 
 # JWT (minimum 32 characters — server fails to start otherwise)
 JWT_SECRET=your-super-secret-jwt-key-change-this-in-production
+
+# Field-level encryption (users.email). Placeholders below are 32 zero bytes —
+# production refuses to boot on them. Generate real keys:
+#   node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
+ENCRYPTION_KEYRING=k1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+ENCRYPTION_ACTIVE_KEY_ID=k1
+ENCRYPTION_BLIND_INDEX_KEY=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
 
 # HTTP Request Body Limit
 BODY_LIMIT=16kb

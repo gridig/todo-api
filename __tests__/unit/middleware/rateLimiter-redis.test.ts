@@ -12,6 +12,10 @@ jest.unstable_mockModule('@/config/env.js', () => ({
     REDIS_URL: 'redis://localhost:6379',
     DISABLE_RATE_LIMIT: true, // skip the actual limiter; we only care
     // about module-load-time branch coverage
+    // rateLimiter → fieldCrypto → keyProvider builds EnvKeyProvider(env) at load.
+    ENCRYPTION_KEYRING: 'k1:xUDmpBXSU0GOwiXb21JUx+TmbrLCvRq2H/FnzNHpa8k=',
+    ENCRYPTION_ACTIVE_KEY_ID: 'k1',
+    ENCRYPTION_BLIND_INDEX_KEY: '77aSVJcRkCMYdHdn/ZgEUhWU035vPNWcvuPPbAgN1/Y=',
   },
 }));
 

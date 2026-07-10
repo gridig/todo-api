@@ -6,22 +6,6 @@ This document outlines the infrastructure and production-readiness work required
 
 ## HIGH PRIORITY (Production Critical)
 
-### Encryption at Rest **[SOC 2]**
-
-**Priority**: High
-**Effort**: Medium
-**Impact**: High
-**SOC 2**: CC6.1 (Data Protection), C1.1 (Confidential Information Protection)
-
-- [ ] Enable PostgreSQL Transparent Data Encryption (TDE) or use encrypted storage volumes
-- [ ] Document encryption-at-rest configuration for the database hosting provider
-- [ ] Add field-level encryption for PII fields (email) using a KMS-backed key
-- [ ] Implement key rotation strategy for field-level encryption keys
-- [ ] Ensure database backups are encrypted
-- [ ] Document key management procedures (who has access, how keys are rotated)
-
-**Why**: SOC 2 requires that confidential data is protected at rest (CC6.1, C1.1). Even if the hosting provider encrypts disks, auditors want evidence of deliberate encryption controls and documented key management.
-
 ### Secrets Management **[SOC 2]**
 
 **Priority**: High
@@ -130,7 +114,7 @@ The Prometheus metrics endpoint is already implemented — see `middleware/metri
 - [ ] Track authentication failures **[SOC 2]** (CC7.2: detect brute force / credential stuffing)
 - [ ] Set up Grafana dashboards **[SOC 2]**
 - [ ] Add alerting for critical issues (error rate spikes, auth failures, downtime) **[SOC 2]**
-- [ ] **Backup-failure alerting** (inherited from the completed Backup & DR work) — expose the pgBackRest scheduler's metrics file (`/tmp/pgbackrest-metrics.prom`: `pgbackrest_last_full_backup_age_seconds`, `pgbackrest_last_diff_backup_age_seconds`, `pgbackrest_wal_archive_ok`) via a node_exporter textfile mount or a small HTTP exporter, then alert: no full in 30h → critical; no diff in 7h → warning; `pgbackrest_wal_archive_ok == 0` → critical (RPO at risk). Railway has no native log-content alerting, so this is the *only* backup-failure alert path — there is no interim. **[SOC 2]**
+- [ ] **Backup-failure alerting** (inherited from the completed Backup & DR work) — expose the pgBackRest scheduler's metrics file (`/tmp/pgbackrest-metrics.prom`: `pgbackrest_last_full_backup_age_seconds`, `pgbackrest_last_diff_backup_age_seconds`, `pgbackrest_wal_archive_ok`) via a node*exporter textfile mount or a small HTTP exporter, then alert: no full in 30h → critical; no diff in 7h → warning; `pgbackrest_wal_archive_ok == 0` → critical (RPO at risk). Railway has no native log-content alerting, so this is the \_only* backup-failure alert path — there is no interim. **[SOC 2]**
 - [ ] Instrument with OpenTelemetry SDK (`@opentelemetry/sdk-node`, `@opentelemetry/auto-instrumentations-node`) emitting OTLP — vendor-neutral; the same OTLP exporter works with any compatible backend (Jaeger, Honeycomb, Datadog, Grafana Tempo, AWS X-Ray) **[SOC 2]**
 - [ ] Ship structured logs to a central aggregator (Grafana Loki, Datadog, or stdout for container orchestrator collection) **[SOC 2]**
 - [ ] Define and monitor uptime SLA targets **[SOC 2]** (A1.2: availability commitments)
@@ -391,7 +375,7 @@ For a SOC 2-compliant production deployment, implement in this order:
 
 - ~~**Database Connection Resilience**~~ — Startup retry (decorrelated jitter) and runtime Prisma error classification (transient → 503 `DATABASE_UNAVAILABLE` + `Retry-After`) shipped. Optional circuit breaker tracked separately.
 - ~~**Database Backup & DR**~~ — Done: pgBackRest live in prod, RPO/RTO defined, first A1.3 restore drill passed 2026-07-06. See **Completed** below. (Backup-failure alerting moved to **Monitoring & Observability**.)
-- **Encryption at Rest** — PostgreSQL encryption, key management documentation
+- ~~**Encryption at Rest**~~ — Done: application-layer AES-256-GCM field encryption of `users.email` + keyed HMAC blind index, env-var keyring (KMS-ready), rotation runbook. Backups already encrypted; volume encryption documented (Railway-managed; TDE N/A on self-hosted TimescaleDB). See **Completed** below.
 - **Secrets Management** — Encrypted-at-rest secret store, indirection from deploy artifact, rotation runbook
 
 ### Phase B: Authentication & Access Control (SOC 2 blocking)
@@ -425,6 +409,32 @@ Items tagged **[SOC 2]** in Phases A–C must be completed before the SOC 2 Type
 
 ## Completed
 
+### Encryption at Rest **[SOC 2]** — done 2026-07-09
+
+**SOC 2**: CC6.1 (Data Protection), C1.1 (Confidential Information Protection).
+
+Three at-rest layers protect confidential data:
+
+- **Application-layer field encryption of `users.email`** — AES-256-GCM ciphertext envelope
+  (`enc:1:<keyId>:<iv>:<tag>:<ct>`) in the `email` column, plus a keyed HMAC-SHA256 **blind index**
+  (`email_hash`) that carries the unique constraint and every `findByEmail` lookup (keyed so it isn't
+  an enumeration oracle). Crypto lives in [`src/lib/crypto/`](src/lib/crypto/); the plaintext→ciphertext
+  cutover is three expand/enforce/contract migrations (`prisma/migrations/20260709000001/2/3`) plus an
+  operator backfill ([`scripts/backfill-email-crypto.ts`](scripts/backfill-email-crypto.ts)).
+- **Keys + rotation** — env-var keyring (Railway per-environment secrets) behind a `KeyProvider`
+  interface so a managed KMS can drop in later. Ciphertext-key rotation is lazy; blind-index-key
+  rotation is an eager re-hash. Runbook: [docs/operations.md → Field encryption key management & rotation](docs/operations.md#field-encryption-key-management--rotation).
+  Production refuses to boot on the dev placeholder key (`assertProductionEnv`).
+- **Volume + backups** — backups already encrypted (pgBackRest AES-256-CBC, see Backup & DR below);
+  live-DB volume encryption is Railway-managed and documented — PostgreSQL TDE is N/A on the
+  self-hosted TimescaleDB image, so app-layer field encryption is the deliberate control of record.
+  Config reference: [docs/configuration.md → Encryption at rest](docs/configuration.md#encryption-at-rest).
+
+**Carried into other tracks (not blockers here):**
+
+- **Read-side key-access audit (CC6.2)** → **Secrets Management** — env-var stores don't log key reads;
+  a managed KMS would close this. Deferred; the `KeyProvider` interface keeps the migration cheap.
+
 ### Database Backup & Disaster Recovery **[SOC 2]** — done 2026-07-06
 
 **SOC 2**: A1.2 (Recovery Objectives), A1.3 (Recovery Testing), C1.1 (Confidential Data Protection).
@@ -432,6 +442,7 @@ Items tagged **[SOC 2]** in Phases A–C must be completed before the SOC 2 Type
 Co-located pgBackRest (in the TimescaleDB image) is live in production: continuous WAL archiving + scheduled daily fulls / 6h diffs to an encrypted Railway Bucket (AES-256-CBC), self-driving (autonomous daily full + diff observed), 35-day PITR window. RPO ≤ 5 min / RTO ≤ 30 min defined. **First A1.3 restore drill passed 2026-07-06** — recovery mechanism, physical role/schema recovery, and audit immutability all verified (RTO ~112s); evidence: [docs/evidence/restore-drill-2026-07-06.md](docs/evidence/restore-drill-2026-07-06.md). Design/build: [docs/pgbackrest-implementation.md](docs/pgbackrest-implementation.md); runbook + template: [docs/operations.md](docs/operations.md#database-restore-disaster-recovery), [docs/restore-drill-report-template.md](docs/restore-drill-report-template.md).
 
 **Carried into other tracks (not blockers here):**
+
 - **Backup-failure alerting** → **Monitoring & Observability** (Prometheus rules on the pgBackRest metrics file; Railway has no native log-content alerting, so there is no interim).
 - **Quarterly restore-drill cadence** — GitHub Actions `.github/workflows/restore-drill-reminder.yml` opens a reminder issue on the 1st of Jan/Apr/Jul/Oct (next ~2026-10-01).
 - **Data-fidelity re-run** — repeat the drill with row-count assertions once production holds real user data (the 2026-07-06 drill restored an empty DB, so it proved the mechanism but not row-level fidelity).

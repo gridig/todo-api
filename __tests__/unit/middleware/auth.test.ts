@@ -1,6 +1,16 @@
 import jwt from 'jsonwebtoken';
 import { jest } from '@jest/globals';
 import { auth } from '@/middleware/auth.js';
+import { env } from '@/config/env.js';
+
+// Mint a token the middleware accepts: correct secret + iss + aud.
+const signValid = (payload: object, opts: jwt.SignOptions = {}): string =>
+  jwt.sign(payload, env.JWT_SECRET, {
+    algorithm: 'HS256',
+    issuer: env.JWT_ISSUER,
+    audience: env.JWT_AUDIENCE,
+    ...opts,
+  });
 
 describe('Auth Middleware', () => {
   /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -23,8 +33,8 @@ describe('Auth Middleware', () => {
     next = jest.fn();
   });
 
-  it('should authenticate valid token', () => {
-    const token = jwt.sign({ userId: '123' }, process.env.JWT_SECRET as string);
+  it('should authenticate a valid token (sub + iss + aud)', () => {
+    const token = signValid({ sub: '123' });
     req.header.mockReturnValue(`Bearer ${token}`);
 
     auth(req, res, next);
@@ -91,28 +101,8 @@ describe('Auth Middleware', () => {
     );
   });
 
-  it('should handle JWT verification errors', () => {
-    req.header.mockReturnValue('Bearer expired-or-malformed-token');
-
-    auth(req, res, next);
-
-    expect(res.status).toHaveBeenCalledWith(401);
-    expect(res.json).toHaveBeenCalledWith(
-      expect.objectContaining({
-        error: expect.objectContaining({
-          code: 'INVALID_TOKEN',
-          message: 'Invalid or expired token',
-        }),
-      }),
-    );
-  });
-
   it('should reject expired JWT token', () => {
-    const expiredToken = jwt.sign(
-      { userId: '123' },
-      process.env.JWT_SECRET as string,
-      { expiresIn: '-1h' }, // Far past the 5s clockTolerance
-    );
+    const expiredToken = signValid({ sub: '123' }, { expiresIn: '-1h' }); // Past the 5s clockTolerance
     req.header.mockReturnValue(`Bearer ${expiredToken}`);
 
     auth(req, res, next);
@@ -130,7 +120,11 @@ describe('Auth Middleware', () => {
   });
 
   it('should reject token signed with wrong secret', () => {
-    const token = jwt.sign({ userId: '123' }, 'wrong-secret');
+    const token = jwt.sign({ sub: '123' }, 'wrong-secret', {
+      algorithm: 'HS256',
+      issuer: env.JWT_ISSUER,
+      audience: env.JWT_AUDIENCE,
+    });
     req.header.mockReturnValue(`Bearer ${token}`);
 
     auth(req, res, next);
@@ -138,16 +132,14 @@ describe('Auth Middleware', () => {
     expect(res.status).toHaveBeenCalledWith(401);
     expect(res.json).toHaveBeenCalledWith(
       expect.objectContaining({
-        error: expect.objectContaining({
-          code: 'INVALID_TOKEN',
-        }),
+        error: expect.objectContaining({ code: 'INVALID_TOKEN' }),
       }),
     );
     expect(next).not.toHaveBeenCalled();
   });
 
   it('should accept lowercase "bearer" scheme (RFC 7235 case-insensitive)', () => {
-    const token = jwt.sign({ userId: '123' }, process.env.JWT_SECRET as string);
+    const token = signValid({ sub: '123' });
     req.header.mockReturnValue(`bearer ${token}`);
 
     auth(req, res, next);
@@ -159,7 +151,9 @@ describe('Auth Middleware', () => {
   it('should reject token with alg=none (algorithm confusion)', () => {
     // jsonwebtoken refuses to sign with alg=none unless explicitly allowed; craft manually.
     const header = Buffer.from(JSON.stringify({ alg: 'none', typ: 'JWT' })).toString('base64url');
-    const payload = Buffer.from(JSON.stringify({ userId: '123' })).toString('base64url');
+    const payload = Buffer.from(
+      JSON.stringify({ sub: '123', iss: env.JWT_ISSUER, aud: env.JWT_AUDIENCE }),
+    ).toString('base64url');
     const unsignedToken = `${header}.${payload}.`;
     req.header.mockReturnValue(`Bearer ${unsignedToken}`);
 
@@ -175,8 +169,10 @@ describe('Auth Middleware', () => {
   });
 
   it('should reject token signed with HS512 when only HS256 is allowed', () => {
-    const token = jwt.sign({ userId: '123' }, process.env.JWT_SECRET as string, {
+    const token = jwt.sign({ sub: '123' }, env.JWT_SECRET, {
       algorithm: 'HS512',
+      issuer: env.JWT_ISSUER,
+      audience: env.JWT_AUDIENCE,
     });
     req.header.mockReturnValue(`Bearer ${token}`);
 
@@ -192,7 +188,7 @@ describe('Auth Middleware', () => {
   });
 
   it('should accept token with sub claim (RFC-7519 subject)', () => {
-    const token = jwt.sign({ sub: '123' }, process.env.JWT_SECRET as string);
+    const token = signValid({ sub: '123' });
     req.header.mockReturnValue(`Bearer ${token}`);
 
     auth(req, res, next);
@@ -201,8 +197,8 @@ describe('Auth Middleware', () => {
     expect(next).toHaveBeenCalled();
   });
 
-  it('should reject token whose payload has neither sub nor userId', () => {
-    const token = jwt.sign({ some: 'other-claim' }, process.env.JWT_SECRET as string);
+  it('should reject token with no sub claim', () => {
+    const token = signValid({ some: 'other-claim' });
     req.header.mockReturnValue(`Bearer ${token}`);
 
     auth(req, res, next);
@@ -216,8 +212,9 @@ describe('Auth Middleware', () => {
     expect(next).not.toHaveBeenCalled();
   });
 
-  it('should reject token whose userId is not a string', () => {
-    const token = jwt.sign({ userId: 123 }, process.env.JWT_SECRET as string);
+  it('should reject a legacy { userId } token (no sub/iss/aud) with INVALID_TOKEN', () => {
+    // Back-compat path removed: pre-rollout tokens no longer verify.
+    const token = jwt.sign({ userId: '123' }, env.JWT_SECRET, { algorithm: 'HS256' });
     req.header.mockReturnValue(`Bearer ${token}`);
 
     auth(req, res, next);
@@ -228,6 +225,46 @@ describe('Auth Middleware', () => {
         error: expect.objectContaining({ code: 'INVALID_TOKEN' }),
       }),
     );
+    expect(next).not.toHaveBeenCalled();
+  });
+
+  it('should reject a token missing the aud claim', () => {
+    const token = jwt.sign({ sub: '123' }, env.JWT_SECRET, {
+      algorithm: 'HS256',
+      issuer: env.JWT_ISSUER,
+    });
+    req.header.mockReturnValue(`Bearer ${token}`);
+
+    auth(req, res, next);
+
+    expect(res.status).toHaveBeenCalledWith(401);
+    expect(next).not.toHaveBeenCalled();
+  });
+
+  it('should reject a token missing the iss claim', () => {
+    const token = jwt.sign({ sub: '123' }, env.JWT_SECRET, {
+      algorithm: 'HS256',
+      audience: env.JWT_AUDIENCE,
+    });
+    req.header.mockReturnValue(`Bearer ${token}`);
+
+    auth(req, res, next);
+
+    expect(res.status).toHaveBeenCalledWith(401);
+    expect(next).not.toHaveBeenCalled();
+  });
+
+  it('should reject a token with the wrong aud claim', () => {
+    const token = jwt.sign({ sub: '123' }, env.JWT_SECRET, {
+      algorithm: 'HS256',
+      issuer: env.JWT_ISSUER,
+      audience: 'someone-else',
+    });
+    req.header.mockReturnValue(`Bearer ${token}`);
+
+    auth(req, res, next);
+
+    expect(res.status).toHaveBeenCalledWith(401);
     expect(next).not.toHaveBeenCalled();
   });
 });

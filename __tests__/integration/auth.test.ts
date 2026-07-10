@@ -4,6 +4,8 @@ import jwt from 'jsonwebtoken';
 import UserService from '@/models/User.js';
 import prisma from '@/lib/prisma.js';
 import { env } from '@/config/env.js';
+import { encryptField, blindIndex } from '@/lib/crypto/fieldCrypto.js';
+import { normalizeEmail } from '@/lib/normalizeEmail.js';
 import { createTestApp, connectTestDB, disconnectTestDB } from '../helpers/testSetup.js';
 import { jest } from '@jest/globals';
 
@@ -35,6 +37,16 @@ describe('Authentication Endpoints', () => {
 
       expect(response.status).toBe(201);
       expect(response.body.token).toBeDefined();
+
+      // Encryption-at-rest: the stored email column is AES-256-GCM ciphertext,
+      // never the plaintext address; the blind index carries the lookup.
+      const stored = await prisma.user.findUnique({
+        where: { emailHash: blindIndex('test@example.com') },
+        select: { email: true },
+      });
+      expect(stored).not.toBeNull();
+      expect(stored!.email.startsWith('enc:1:')).toBe(true);
+      expect(stored!.email).not.toContain('test@example.com');
     });
 
     it('should reject weak password', async () => {
@@ -198,10 +210,9 @@ describe('Authentication Endpoints', () => {
       expect(typeof payload.exp).toBe('number');
     });
 
-    it('accepts legacy { userId } tokens while JWT_VERIFY_REQUIRE_CLAIMS is false', async () => {
-      // Grace-window invariant: tokens minted before the iss/aud rollout
-      // still verify successfully, so users are not forced to re-login on
-      // the day of deploy.
+    it('rejects legacy { userId } tokens with 401 INVALID_TOKEN', async () => {
+      // Post-migration: iss/aud are enforced and the { userId } back-compat
+      // path is gone, so pre-rollout tokens no longer verify.
       const { user } = await (await import('../helpers/testSetup.js')).createTestUser();
       const legacyToken = jwt.sign({ userId: user.id }, env.JWT_SECRET, {
         expiresIn: '24h',
@@ -211,18 +222,25 @@ describe('Authentication Endpoints', () => {
       const response = await request(app)
         .get('/todos')
         .set('Authorization', `Bearer ${legacyToken}`);
-      expect(response.status).toBe(200);
+      expect(response.status).toBe(401);
+      expect(response.body.error.code).toBe('INVALID_TOKEN');
     });
 
     it('rehashes a legacy cost-10 password on next successful login', async () => {
       // Pre-create the user via Prisma with a cost-10 hash, bypassing
       // UserService.create (which would already hash at the current
-      // SALT_ROUNDS). Then login and confirm the stored hash upgraded.
+      // SALT_ROUNDS). Email/emailHash still go through the field-crypto helpers
+      // so the login-by-blind-index lookup can find the row. Then login and
+      // confirm the stored hash upgraded.
       const email = `rehash-${Date.now()}@example.com`;
       const password = 'TestPass123!';
       const legacyHash = await bcrypt.hash(password, 10);
       const user = await prisma.user.create({
-        data: { email, password: legacyHash },
+        data: {
+          email: encryptField(normalizeEmail(email)),
+          emailHash: blindIndex(email),
+          password: legacyHash,
+        },
         select: { id: true, password: true },
       });
       expect(bcrypt.getRounds(user.password)).toBe(10);

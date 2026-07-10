@@ -72,8 +72,8 @@ export async function createTestUser(email: string | null = null): Promise<TestU
     password: 'TestPass123!',
   });
 
-  // Issue test tokens in the same shape production issues: sub + iss + aud.
-  // Keeps the test suite forward-compatible with JWT_VERIFY_REQUIRE_CLAIMS=true.
+  // Issue test tokens in the same shape production issues: sub + iss + aud
+  // (iss/aud are enforced unconditionally by middleware/auth.ts).
   const authToken = jwt.sign({ sub: user.id } as JWTPayload, env.JWT_SECRET, {
     expiresIn: '24h',
     algorithm: 'HS256',

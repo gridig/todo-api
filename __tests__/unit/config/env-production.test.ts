@@ -1,6 +1,9 @@
-import { assertProductionEnv } from '@/config/env.js';
+import { assertProductionEnv, ENCRYPTION_DEV_PLACEHOLDER_KEY } from '@/config/env.js';
 
 const STRONG_TOKEN = 'a'.repeat(40);
+// Real (non-placeholder) 32-byte base64 keys — distinct from the dev placeholder.
+const STRONG_KEYRING = 'k1:xUDmpBXSU0GOwiXb21JUx+TmbrLCvRq2H/FnzNHpa8k=';
+const STRONG_BLIND_INDEX_KEY = '77aSVJcRkCMYdHdn/ZgEUhWU035vPNWcvuPPbAgN1/Y=';
 
 const baseProdCfg = (overrides: Partial<Parameters<typeof assertProductionEnv>[0]> = {}) => ({
   NODE_ENV: 'production',
@@ -11,6 +14,8 @@ const baseProdCfg = (overrides: Partial<Parameters<typeof assertProductionEnv>[0
   ENABLE_ECHO_ROUTES_PRODUCTION_CONFIRM: false,
   CORS_ORIGIN: 'https://example.com',
   CORS_CREDENTIALS: 'false',
+  ENCRYPTION_KEYRING: STRONG_KEYRING,
+  ENCRYPTION_BLIND_INDEX_KEY: STRONG_BLIND_INDEX_KEY,
   ...overrides,
 });
 
@@ -94,6 +99,31 @@ describe('assertProductionEnv', () => {
       baseProdCfg({ ENABLE_ECHO_ROUTES_PRODUCTION_CONFIRM: true }),
     );
     expect(result.errors).toEqual([]);
+  });
+
+  it('flags an empty ENCRYPTION_KEYRING in production', () => {
+    const result = assertProductionEnv(baseProdCfg({ ENCRYPTION_KEYRING: '' }));
+    expect(result.errors).toEqual(
+      expect.arrayContaining([expect.stringMatching(/ENCRYPTION_KEYRING must be real/)]),
+    );
+  });
+
+  it('flags the committed dev placeholder key inside ENCRYPTION_KEYRING', () => {
+    const result = assertProductionEnv(
+      baseProdCfg({ ENCRYPTION_KEYRING: `dev:${ENCRYPTION_DEV_PLACEHOLDER_KEY}` }),
+    );
+    expect(result.errors).toEqual(
+      expect.arrayContaining([expect.stringMatching(/ENCRYPTION_KEYRING must be real/)]),
+    );
+  });
+
+  it('flags the committed dev placeholder ENCRYPTION_BLIND_INDEX_KEY', () => {
+    const result = assertProductionEnv(
+      baseProdCfg({ ENCRYPTION_BLIND_INDEX_KEY: ENCRYPTION_DEV_PLACEHOLDER_KEY }),
+    );
+    expect(result.errors).toEqual(
+      expect.arrayContaining([expect.stringMatching(/ENCRYPTION_BLIND_INDEX_KEY must be real/)]),
+    );
   });
 
   it('accumulates multiple errors in a single call', () => {

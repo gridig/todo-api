@@ -1,6 +1,7 @@
 import bcrypt from 'bcrypt';
 import prisma from '../lib/prisma.js';
 import { env } from '../config/env.js';
+import { encryptField, decryptField, blindIndex } from '../lib/crypto/fieldCrypto.js';
 import { UserServiceInterface } from '../types/index.js';
 
 // Bcrypt cost factor. OWASP 2024+ floor for new deployments. Existing
@@ -28,29 +29,35 @@ if (bcrypt.getRounds(DUMMY_PASSWORD_HASH) !== SALT_ROUNDS) {
   );
 }
 
-// NFC + lowercase + trim is the canonical email form across the auth path
-// (rate-limit key, Joi validation, and storage). All three must agree or
-// Unicode-variant inputs land in different buckets / rows. See the prisma
-// migration `*_normalize_user_emails` for the one-off backfill of legacy rows.
-export const normalizeEmail = (email: string): string =>
-  email.normalize('NFC').toLowerCase().trim();
+// Canonical email form lives in one place now (lib/normalizeEmail.ts).
+// Re-exported here so existing importers (routes/auth.ts, tests) keep working.
+export { normalizeEmail } from '../lib/normalizeEmail.js';
+import { normalizeEmail } from '../lib/normalizeEmail.js';
 
 export const UserService: UserServiceInterface = {
   async create({ email, password }) {
     const hashedPassword = await bcrypt.hash(password, SALT_ROUNDS);
-    return prisma.user.create({
+    const normalized = normalizeEmail(email);
+    const user = await prisma.user.create({
       data: {
-        email: normalizeEmail(email),
+        // email stores ciphertext; emailHash is the deterministic lookup key.
+        email: encryptField(normalized),
+        emailHash: blindIndex(normalized),
         password: hashedPassword,
       },
     });
+    // Hand callers the plaintext email — ciphertext stays at the DB layer.
+    return { ...user, email: normalized };
   },
 
   async findByEmail(email) {
-    return prisma.user.findUnique({
-      where: { email: normalizeEmail(email) },
+    // Look up by the blind index (the email column is randomized ciphertext),
+    // then decrypt on read so callers still get the plaintext address.
+    const user = await prisma.user.findUnique({
+      where: { emailHash: blindIndex(email) },
       select: { id: true, email: true, password: true },
     });
+    return user ? { ...user, email: decryptField(user.email) } : null;
   },
 
   async comparePassword(plainPassword, hashedPassword) {

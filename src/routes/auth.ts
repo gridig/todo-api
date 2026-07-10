@@ -1,8 +1,8 @@
 import express, { Response, Router } from 'express';
 import jwt from 'jsonwebtoken';
-import { createHash } from 'node:crypto';
-import UserService, { DUMMY_PASSWORD_HASH, normalizeEmail } from '../models/User.js';
+import UserService, { DUMMY_PASSWORD_HASH } from '../models/User.js';
 import { env } from '../config/env.js';
+import { blindIndex } from '../lib/crypto/fieldCrypto.js';
 import { authLimiter, loginEmailLimiter, registerLimiter } from '../middleware/rateLimiter.js';
 import { validate, schemas } from '../middleware/validation.js';
 import { InvalidCredentialsError } from '../errors/index.js';
@@ -17,11 +17,13 @@ import type {
   RequestWithLogger,
 } from '../types/index.js';
 
-// Hash the canonical form (NFC + lowercase + trim, same as storage and the
-// rate-limit key) so audit emailHash values correlate across Unicode variants.
-// Exported for the canonicalization unit test.
-export const hashEmail = (email: string): string =>
-  createHash('sha256').update(normalizeEmail(email)).digest('hex');
+// Audit-facing email hash. Delegates to the keyed blind index (HMAC over the
+// canonical NFC+lowercase+trim form) — the same value stored in
+// users.email_hash — so failed-login audit rows correlate to an account across
+// Unicode variants without ever recording the raw address, and are not an
+// offline-enumerable oracle (keyed, unlike a bare SHA-256). Exported for the
+// canonicalization unit test.
+export const hashEmail = (email: string): string => blindIndex(email);
 
 const router: Router = express.Router();
 
@@ -51,7 +53,10 @@ router.post(
         entityType: 'User',
         entityId: user.id,
         changedBy: user.id,
-        newValue: { id: user.id, email: user.email },
+        // Store the blind-index hash, not the raw address: audit_entries JSONB is
+        // neither redacted (Pino redaction is log-only) nor encrypted, so a raw
+        // email here would be PII at rest. entityId already identifies the user.
+        newValue: { id: user.id, emailHash: hashEmail(user.email) },
       },
       log,
     );

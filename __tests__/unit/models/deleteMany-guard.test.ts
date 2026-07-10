@@ -4,7 +4,13 @@ import { jest } from '@jest/globals';
 // NODE_ENV=test they must throw before touching the database.
 
 jest.unstable_mockModule('@/config/env.js', () => ({
-  env: { NODE_ENV: 'production' },
+  env: {
+    NODE_ENV: 'production',
+    // User.js → fieldCrypto → keyProvider builds EnvKeyProvider(env) at load.
+    ENCRYPTION_KEYRING: 'k1:xUDmpBXSU0GOwiXb21JUx+TmbrLCvRq2H/FnzNHpa8k=',
+    ENCRYPTION_ACTIVE_KEY_ID: 'k1',
+    ENCRYPTION_BLIND_INDEX_KEY: '77aSVJcRkCMYdHdn/ZgEUhWU035vPNWcvuPPbAgN1/Y=',
+  },
 }));
 
 const userDeleteMany = jest.fn();

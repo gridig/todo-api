@@ -5,12 +5,17 @@ import { Logger } from 'pino';
 
 export interface User {
   id: string;
+  // At the service boundary `email` is always plaintext (create/findByEmail
+  // decrypt before returning); at rest the column holds AES-256-GCM ciphertext.
   email: string;
+  // Keyed HMAC blind index over the canonical email — the lookup/uniqueness key.
+  emailHash: string;
   password: string;
   createdAt: Date;
   updatedAt: Date;
 }
 
+// findByEmail returns only these three; email is decrypted, emailHash omitted.
 export type UserLoginFields = Pick<User, 'id' | 'email' | 'password'>;
 
 export interface Todo {
@@ -86,14 +91,10 @@ export type AuthRouteResponse = AuthResponse | ErrorResponse;
 
 // ==================== JWT Types ====================
 
-// Tokens issued post-2026-05 use `sub` (RFC 7519 standard claim) plus
-// `iss`/`aud`. Tokens issued before the rollout still carry the legacy
-// `userId` payload; middleware/auth.ts accepts either while the grace
-// window flag JWT_VERIFY_REQUIRE_CLAIMS is false, then drops the
-// back-compat path on the follow-up deploy.
+// Tokens carry the RFC 7519 `sub` claim (user id) plus `iss`/`aud`, set on the
+// sign side in routes/auth.ts and enforced unconditionally by middleware/auth.ts.
 export interface JWTPayload {
-  sub?: string;
-  userId?: string;
+  sub: string;
   iss?: string;
   aud?: string;
   iat?: number;

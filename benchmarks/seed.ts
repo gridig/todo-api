@@ -1,6 +1,8 @@
 import 'dotenv/config';
 import prisma, { pool } from '@/lib/prisma.js';
 import bcrypt from 'bcrypt';
+import { encryptField, blindIndex } from '@/lib/crypto/fieldCrypto.js';
+import { normalizeEmail } from '@/lib/normalizeEmail.js';
 
 const SALT_ROUNDS = 10;
 const NUM_USERS = 10;
@@ -15,10 +17,15 @@ const seed = async () => {
 
   for (let i = 0; i < NUM_USERS; i++) {
     const email = `benchuser${i}@example.com`;
+    const normalized = normalizeEmail(email);
     const hashedPassword = await bcrypt.hash('BenchPass1!', SALT_ROUNDS);
 
     const user = await prisma.user.create({
-      data: { email, password: hashedPassword },
+      data: {
+        email: encryptField(normalized),
+        emailHash: blindIndex(normalized),
+        password: hashedPassword,
+      },
     });
 
     const todos = Array.from({ length: TODOS_PER_USER }, (_, j) => ({
