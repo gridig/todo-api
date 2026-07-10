@@ -57,33 +57,23 @@ export const auth = (req: RequestWithLogger, res: Response, next: NextFunction):
       return;
     }
 
-    // The iss/aud check is gated behind JWT_VERIFY_REQUIRE_CLAIMS during the
-    // grace window: deploy with the flag false so legacy { userId } tokens
-    // issued before the iss/aud rollout still verify; flip to true after a
-    // full 24h-expiry cycle so every in-flight token now carries the new
-    // claims. 5s clockTolerance absorbs small clock drift across instances.
-    const verifyOptions: jwt.VerifyOptions = {
+    // iss/aud are enforced unconditionally: every issued token carries them
+    // (sign side in routes/auth.ts) and the legacy { userId } grace window has
+    // closed. 5s clockTolerance absorbs small clock drift across instances.
+    const decoded = jwt.verify(token, env.JWT_SECRET, {
       algorithms: ['HS256'],
       clockTolerance: 5,
-      ...(env.JWT_VERIFY_REQUIRE_CLAIMS
-        ? { issuer: env.JWT_ISSUER, audience: env.JWT_AUDIENCE }
-        : {}),
-    };
-    const decoded = jwt.verify(token, env.JWT_SECRET, verifyOptions);
+      issuer: env.JWT_ISSUER,
+      audience: env.JWT_AUDIENCE,
+    });
 
     if (typeof decoded !== 'object' || decoded === null) {
       throw new Error('Invalid JWT payload');
     }
 
-    // Accept the new RFC-7519 `sub` claim and the legacy `userId` field
-    // during the grace window. Reject if neither yields a string.
-    const payload = decoded as { sub?: unknown; userId?: unknown };
-    const userId =
-      typeof payload.sub === 'string'
-        ? payload.sub
-        : typeof payload.userId === 'string'
-          ? payload.userId
-          : undefined;
+    // Authenticated user id is the RFC-7519 `sub` claim.
+    const payload = decoded as { sub?: unknown };
+    const userId = typeof payload.sub === 'string' ? payload.sub : undefined;
     if (userId === undefined) {
       throw new Error('Invalid JWT payload');
     }

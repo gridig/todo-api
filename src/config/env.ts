@@ -131,11 +131,6 @@ export const env = cleanEnv(process.env, {
     desc: 'JWT `aud` claim. Set both sign and verify sides to the same value.',
   }),
 
-  JWT_VERIFY_REQUIRE_CLAIMS: bool({
-    default: false,
-    desc: 'When true, jwt.verify rejects tokens lacking iss/aud claims. Flip to true at least one full 24h-expiry window after the rollout deploy so legacy tokens have aged out. Until then, verify accepts both legacy { userId } and new { sub, iss, aud } payloads.',
-  }),
-
   // Field-level encryption (see docs/configuration.md → "Encryption at rest").
   // All three are required in every environment (like JWT_SECRET) so the app
   // never silently starts without a key. Dev/test use the committed placeholder

@@ -210,7 +210,7 @@ For the full testing guide (structure, helpers reference, writing tests, databas
    - 24-hour expiration, HS256 only
    - Payload carries the standard `sub` claim (subject = user id), plus `iss` and `aud` (set via `JWT_ISSUER` / `JWT_AUDIENCE`)
    - Verification has 5-second `clockTolerance` for cross-instance drift
-   - `JWT_VERIFY_REQUIRE_CLAIMS=false` during the rollout grace window — `src/middleware/auth.ts` still accepts legacy `{ userId }` payloads. Flip to `true` ≥24h after deploy; once stable, drop the back-compat branch
+   - `src/middleware/auth.ts` enforces `issuer`/`audience` on every request and reads only the `sub` claim. The legacy `{ userId }` payload path and the `JWT_VERIFY_REQUIRE_CLAIMS` grace-window flag were removed after the 2026-07 rollout
    - JWT_SECRET must be strong (32+ characters in production)
    - Tokens validated in `src/middleware/auth.ts`
 

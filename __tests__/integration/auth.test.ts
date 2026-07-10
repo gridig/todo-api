@@ -210,10 +210,9 @@ describe('Authentication Endpoints', () => {
       expect(typeof payload.exp).toBe('number');
     });
 
-    it('accepts legacy { userId } tokens while JWT_VERIFY_REQUIRE_CLAIMS is false', async () => {
-      // Grace-window invariant: tokens minted before the iss/aud rollout
-      // still verify successfully, so users are not forced to re-login on
-      // the day of deploy.
+    it('rejects legacy { userId } tokens with 401 INVALID_TOKEN', async () => {
+      // Post-migration: iss/aud are enforced and the { userId } back-compat
+      // path is gone, so pre-rollout tokens no longer verify.
       const { user } = await (await import('../helpers/testSetup.js')).createTestUser();
       const legacyToken = jwt.sign({ userId: user.id }, env.JWT_SECRET, {
         expiresIn: '24h',
@@ -223,7 +222,8 @@ describe('Authentication Endpoints', () => {
       const response = await request(app)
         .get('/todos')
         .set('Authorization', `Bearer ${legacyToken}`);
-      expect(response.status).toBe(200);
+      expect(response.status).toBe(401);
+      expect(response.body.error.code).toBe('INVALID_TOKEN');
     });
 
     it('rehashes a legacy cost-10 password on next successful login', async () => {
