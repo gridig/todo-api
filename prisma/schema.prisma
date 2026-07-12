@@ -29,6 +29,10 @@ model User {
   // Keyed HMAC-SHA256 blind index over the canonical email. Carries account
   // uniqueness and every login lookup (findByEmail).
   emailHash  String   @unique @map("email_hash")
+  // Optional user-chosen display name. Lower-sensitivity than email and needs
+  // no equality lookup, so it is stored as plaintext (unlike the encrypted
+  // email column). Nullable — existing rows and registration don't set it.
+  name       String?  @db.VarChar(100)
   password   String
   createdAt  DateTime @default(now()) @map("created_at")
   updatedAt  DateTime @updatedAt @map("updated_at")

@@ -325,6 +325,157 @@ Todos are ordered by `createdAt` descending (newest first). When `hasMore` is `t
 
 ---
 
+## User
+
+Self-service account management. All `/user` endpoints require authentication via JWT in the
+`Authorization` header.
+
+### Get Current Profile
+
+**GET** `/user/me`
+
+**Rate Limit**: 100 requests per minute
+
+**Response** (200 OK):
+
+```json
+{
+  "id": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
+  "name": "Ada Lovelace",
+  "email": "ada@example.com",
+  "createdAt": "2024-01-15T10:30:00.000Z",
+  "updatedAt": "2024-01-15T10:30:00.000Z"
+}
+```
+
+`name` is `null` until set. The password hash and email blind index are never returned.
+
+---
+
+### Update Profile
+
+**PATCH** `/user/me`
+
+**Rate Limit**: 30 requests per minute
+
+Update the display name and/or email. At least one of `name`/`email` must be provided. **Changing the
+email requires the current password** (re-authentication); a name-only change does not.
+
+**Request Body**:
+
+```json
+{
+  "name": "Ada Lovelace",
+  "email": "ada.new@example.com",
+  "currentPassword": "CurrentPass123!"
+}
+```
+
+**Response** (200 OK): the updated profile (same shape as `GET /user/me`).
+
+**Validation Rules**:
+
+- `name`: 1-100 characters, trimmed
+- `email`: valid email, max 72 characters
+- `currentPassword`: required if and only if `email` is present
+
+**Errors**: `400 VALIDATION_ERROR` (empty patch, or email without `currentPassword`),
+`401 INVALID_CREDENTIALS` (wrong current password), `409 DUPLICATE_EMAIL` (email already in use).
+
+---
+
+### Change Password
+
+**PATCH** `/user/me/password`
+
+**Rate Limit**: 30 requests per minute
+
+Verifies the current password, sets the new one, and **revokes every refresh token** for the user
+(all devices must log in again). The current access token remains valid until it expires.
+
+**Request Body**:
+
+```json
+{
+  "currentPassword": "CurrentPass123!",
+  "newPassword": "NewPass456!"
+}
+```
+
+**Response** (200 OK):
+
+```json
+{
+  "message": "Password changed. Please log in again."
+}
+```
+
+**Validation Rules**:
+
+- `newPassword`: 8-72 characters, must contain uppercase, lowercase, number, and special character
+
+**Errors**: `400 VALIDATION_ERROR` (weak new password), `401 INVALID_CREDENTIALS` (wrong current password).
+
+---
+
+### Delete Account
+
+**DELETE** `/user/me`
+
+**Rate Limit**: 30 requests per minute
+
+Verifies the current password, then permanently deletes the account. Todos and refresh tokens are
+cascade-deleted; the deletion is recorded in the audit log (which is retained).
+
+**Request Body**:
+
+```json
+{
+  "currentPassword": "CurrentPass123!"
+}
+```
+
+**Response** (204 No Content): Empty body
+
+**Errors**: `401 INVALID_CREDENTIALS` (wrong current password).
+
+---
+
+### Export Data
+
+**GET** `/user/me/export`
+
+**Rate Limit**: 100 requests per minute
+
+Returns the full profile plus every todo as a downloadable JSON attachment (data portability). The
+access is recorded in the audit log.
+
+**Response** (200 OK, `Content-Disposition: attachment; filename="todo-api-export-<userId>.json"`):
+
+```json
+{
+  "user": {
+    "id": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
+    "name": "Ada Lovelace",
+    "email": "ada@example.com",
+    "createdAt": "2024-01-15T10:30:00.000Z",
+    "updatedAt": "2024-01-15T10:30:00.000Z"
+  },
+  "todos": [
+    {
+      "id": "550e8400-e29b-41d4-a716-446655440000",
+      "text": "Buy groceries",
+      "done": false,
+      "userId": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
+      "createdAt": "2024-01-15T10:30:00.000Z",
+      "updatedAt": "2024-01-15T10:30:00.000Z"
+    }
+  ]
+}
+```
+
+---
+
 ## Health Check
 
 Health check endpoints for monitoring and container orchestration. These endpoints are **not rate limited** to ensure load balancers can always reach them.
@@ -649,6 +800,7 @@ All error responses follow a structured format with error codes for client-side 
 | `NO_TOKEN`               | 401         | No authentication token provided                                  |
 | `INVALID_TOKEN`          | 401         | Token is invalid or expired                                       |
 | `TODO_NOT_FOUND`         | 404         | Todo does not exist or belongs to another user                    |
+| `USER_NOT_FOUND`         | 404         | Authenticated user's account no longer exists                     |
 | `ROUTE_NOT_FOUND`        | 404         | API endpoint does not exist                                       |
 | `DUPLICATE_EMAIL`        | 409         | Email already registered                                          |
 | `DUPLICATE_VALUE`        | 409         | Unique constraint violation                                       |

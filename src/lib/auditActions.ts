@@ -12,6 +12,12 @@ export const AuditAction = {
 
   AccessDenied: 'access.denied',
 
+  // Self-service profile lifecycle (routes/user.ts).
+  UserUpdate: 'user.update',
+  UserPasswordChange: 'user.password.change',
+  UserDelete: 'user.delete',
+  UserExport: 'user.export',
+
   TodoCreate: 'todo.create',
   TodoUpdate: 'todo.update',
   TodoDelete: 'todo.delete',

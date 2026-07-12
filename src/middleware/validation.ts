@@ -75,18 +75,24 @@ const emailSchema = Joi.string()
   .custom((value: string) => normalizeEmail(value))
   .max(72);
 
+// Password complexity rule, shared by registration and password change so the
+// two never drift apart. `.required()` is applied per-use.
+const passwordSchema = Joi.string()
+  .min(8)
+  .max(72)
+  .pattern(/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]+$/)
+  .messages({
+    'string.pattern.base':
+      'Password must contain uppercase, lowercase, number and special character',
+  });
+
+// Display name: trimmed, 1-100 chars (matches the users.name VARCHAR(100)).
+const nameSchema = Joi.string().trim().min(1).max(100);
+
 export const schemas = {
   register: Joi.object({
     email: emailSchema.required(),
-    password: Joi.string()
-      .min(8)
-      .max(72)
-      .pattern(/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]+$/)
-      .required()
-      .messages({
-        'string.pattern.base':
-          'Password must contain uppercase, lowercase, number and special character',
-      }),
+    password: passwordSchema.required(),
   }),
 
   login: Joi.object({
@@ -104,6 +110,28 @@ export const schemas = {
 
   logout: Joi.object({
     refreshToken: Joi.string().max(512).required(),
+  }),
+
+  // Profile update: at least one of name/email. An email change requires the
+  // current password (re-auth against account takeover via a stolen access
+  // token) — enforced here so the handler can assume it is present.
+  updateProfile: Joi.object({
+    name: nameSchema,
+    email: emailSchema,
+    currentPassword: Joi.string().when('email', {
+      is: Joi.exist(),
+      then: Joi.required(),
+      otherwise: Joi.forbidden(),
+    }),
+  }).or('name', 'email'),
+
+  changePassword: Joi.object({
+    currentPassword: Joi.string().required(),
+    newPassword: passwordSchema.required(),
+  }),
+
+  deleteAccount: Joi.object({
+    currentPassword: Joi.string().required(),
   }),
 
   todo: Joi.object({

@@ -10,6 +10,8 @@ export interface User {
   email: string;
   // Keyed HMAC blind index over the canonical email — the lookup/uniqueness key.
   emailHash: string;
+  // Optional user-chosen display name (plaintext at rest).
+  name: string | null;
   password: string;
   createdAt: Date;
   updatedAt: Date;
@@ -17,6 +19,10 @@ export interface User {
 
 // findByEmail returns only these three; email is decrypted, emailHash omitted.
 export type UserLoginFields = Pick<User, 'id' | 'email' | 'password'>;
+
+// Public profile shape returned by the /user/me endpoints — never carries the
+// password hash or emailHash. email is decrypted before it reaches this type.
+export type UserProfile = Pick<User, 'id' | 'email' | 'name' | 'createdAt' | 'updatedAt'>;
 
 export interface Todo {
   id: string;
@@ -144,8 +150,22 @@ export type ErrorRequestHandler = (
 export interface UserServiceInterface {
   create(data: { email: string; password: string }): Promise<User>;
   findByEmail(email: string): Promise<UserLoginFields | null>;
+  // Read a user's public profile by id (email decrypted); null if not found.
+  findById(userId: string): Promise<UserProfile | null>;
   comparePassword(plainPassword: string, hashedPassword: string): Promise<boolean>;
+  // Re-auth helper: compare a plaintext password against the stored hash for a
+  // given user id. false when the user does not exist.
+  verifyPassword(userId: string, plainPassword: string): Promise<boolean>;
   updatePassword(userId: string, plainPassword: string): Promise<void>;
+  // Update profile fields (name and/or email). An email change re-encrypts the
+  // ciphertext column and recomputes the blind index atomically, audits the
+  // change, and throws DuplicateEmailError on a blind-index collision.
+  updateProfile(userId: string, patch: { name?: string; email?: string }): Promise<UserProfile>;
+  // Change password and revoke every live refresh token for the user in one
+  // transaction. Returns how many tokens were revoked.
+  changePassword(userId: string, newPassword: string): Promise<{ revokedCount: number }>;
+  // Audit then delete the user; Todo/RefreshToken rows cascade away.
+  deleteAccount(userId: string): Promise<void>;
   needsRehash(hashedPassword: string): boolean;
   deleteMany(): Promise<{ count: number }>;
 }
@@ -154,6 +174,8 @@ export interface TodoServiceInterface {
   create(data: { text: string; userId: string; done?: boolean }): Promise<Todo>;
   findByUser(userId: string, params?: PaginationParams): Promise<PaginatedResult<Todo>>;
   findOne(params: { id: string; userId: string }): Promise<Todo | null>;
+  // Every todo for a user, unpaginated — used by the data-export endpoint.
+  findAllByUser(userId: string): Promise<Todo[]>;
   toggleDone(params: { id: string; userId: string }): Promise<Todo | null>;
   delete(params: { id: string; userId: string }): Promise<Todo | null>;
   deleteMany(filter?: { userId?: string }): Promise<{ count: number }>;

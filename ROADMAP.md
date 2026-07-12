@@ -6,27 +6,6 @@ This document outlines the infrastructure and production-readiness work required
 
 ## HIGH PRIORITY (Production Critical)
 
-### User Profile Management **[SOC 2]**
-
-**Priority**: High
-**Effort**: Medium
-**Impact**: High
-**SOC 2**: CC6.1 (Logical Access), P4.1-P4.3 (Privacy — Data Subject Rights)
-
-Core profile endpoints with account lifecycle management. No dependency on email service or refresh tokens.
-
-- [ ] Add `name` field to User model in Prisma schema
-- [ ] Add `GET /user/me` endpoint (get current user profile)
-- [ ] Add `PATCH /user/me` for profile updates (name, email)
-- [ ] Add password change functionality (`PATCH /user/me/password` — requires current password, invalidates all refresh tokens once **JWT Refresh + Token Revocation** is implemented)
-- [ ] Add `DELETE /user/me` for account deletion **[SOC 2]** (Privacy: data subject deletion rights)
-- [ ] Add `GET /user/me/export` for user data export **[SOC 2]** (Privacy: data portability)
-- [ ] On account deletion: cascade delete todos (and refresh tokens once **JWT Refresh + Token Revocation** is implemented), audit log the deletion before executing
-- [ ] Implement proper validation for profile updates
-- [ ] Add tests for all profile operations
-
-**Why**: Users must have control over their profiles and data. Essential for user autonomy, GDPR compliance, and SOC 2 Privacy criteria.
-
 ### Email Service Integration
 
 **Priority**: Medium
@@ -339,7 +318,7 @@ For a SOC 2-compliant production deployment, implement in this order:
 
 ### Phase B: Authentication & Access Control (SOC 2 blocking)
 
-- **User Profile Management** — Core profile, account deletion, data export
+- ~~**User Profile Management**~~ — Done: `/user/me` profile read/update, password change (revokes all refresh tokens), account deletion (cascade + audit), data export. See **Completed** below.
 - ~~**JWT Refresh + Token Revocation**~~ — Done: rotating refresh tokens, `/auth/refresh`, `/auth/logout`, `/auth/logout-all`, reuse/theft detection. See **Completed** below.
 - **Role-Based Access Control (RBAC)** — Role-based access, admin/user separation (uses `ForbiddenError` from `errors/index.ts`)
 
@@ -367,6 +346,31 @@ Items tagged **[SOC 2]** in Phases A–C must be completed before the SOC 2 Type
 ---
 
 ## Completed
+
+### User Profile Management **[SOC 2]** — done 2026-07-12
+
+**SOC 2**: CC6.1 (Logical Access), P4.1–P4.3 (Privacy — Data Subject Rights).
+
+Self-service account lifecycle under a new `/user` router (`src/routes/user.ts`, mounted in `src/app.ts`):
+
+- **`name` field** — added to the `User` model (`prisma/schema.prisma`, migration
+  `20260712154802_add_user_name`); nullable `VarChar(100)`, stored plaintext (the field-encryption layer
+  is deliberately scoped to `email`, the identifying PII with a blind-index lookup).
+- **Endpoints** — `GET /user/me` (profile), `PATCH /user/me` (name/email; an email change re-encrypts the
+  ciphertext column, rotates the blind index, and requires the current password), `PATCH /user/me/password`
+  (verifies current password, then rotates it and **revokes every refresh token** atomically),
+  `DELETE /user/me` (re-auth, then audit-then-delete in one transaction — todos and refresh tokens cascade
+  away, the `user.delete` audit row is retained), `GET /user/me/export` (profile + all todos as a JSON
+  download; audited).
+- **Service** (`src/models/User.ts`) — `findById`, `verifyPassword`, `updateProfile` (P2002 →
+  `DuplicateEmailError`), `changePassword`, `deleteAccount`; all mutations audit inside `prisma.$transaction`
+  (mirrors `TodoService`). New `TodoService.findAllByUser` backs the export.
+- **Audit actions** (`src/lib/auditActions.ts`) — `user.update`, `user.password.change`, `user.delete`,
+  `user.export`; raw email is never written to audit JSON (blind-index hash only).
+- **Validation** (`src/middleware/validation.ts`) — `updateProfile` / `changePassword` / `deleteAccount`
+  schemas; `UserNotFoundError` added to `src/errors/index.ts`.
+- Tests: `__tests__/integration/user/{get-me,update-profile,change-password,delete-account,export}.test.ts`
+  (includes cascade-on-delete and audit-write-rollback coverage). Docs: `docs/api.md` → **User**.
 
 ### JWT Refresh + Token Revocation **[SOC 2]** — done 2026-07-12
 
