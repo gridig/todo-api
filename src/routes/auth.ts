@@ -1,11 +1,19 @@
 import express, { Response, Router } from 'express';
-import jwt from 'jsonwebtoken';
+import type { Logger } from 'pino';
 import UserService, { DUMMY_PASSWORD_HASH } from '../models/User.js';
-import { env } from '../config/env.js';
+import RefreshTokenService from '../models/RefreshToken.js';
+import { signAccessToken } from '../lib/tokens.js';
 import { blindIndex } from '../lib/crypto/fieldCrypto.js';
-import { authLimiter, loginEmailLimiter, registerLimiter } from '../middleware/rateLimiter.js';
+import {
+  authLimiter,
+  loginEmailLimiter,
+  registerLimiter,
+  refreshLimiter,
+  writeLimiter,
+} from '../middleware/rateLimiter.js';
 import { validate, schemas } from '../middleware/validation.js';
-import { InvalidCredentialsError } from '../errors/index.js';
+import { auth, requireUserId } from '../middleware/auth.js';
+import { InvalidCredentialsError, InvalidTokenError } from '../errors/index.js';
 import { writeOrLog } from '../lib/auditLog.js';
 import { AuditAction } from '../lib/auditActions.js';
 import prisma from '../lib/prisma.js';
@@ -13,7 +21,6 @@ import type {
   RegisterRequest,
   LoginRequest,
   AuthRouteResponse,
-  JWTPayload,
   RequestWithLogger,
 } from '../types/index.js';
 
@@ -24,6 +31,27 @@ import type {
 // offline-enumerable oracle (keyed, unlike a bare SHA-256). Exported for the
 // canonicalization unit test.
 export const hashEmail = (email: string): string => blindIndex(email);
+
+// Shared theft response: a revoked refresh token (or a lost rotation race)
+// means the token may be in an attacker's hands. Revoke the user's entire
+// token set and record a security audit event. Fire-and-forget audit matches
+// the rest of the auth flow — the 401 must not wait on the audit write.
+async function revokeAllAndAuditReuse(userId: string, log: Logger): Promise<void> {
+  await RefreshTokenService.revokeAllForUser(userId);
+  log.warn({ userId }, 'Refresh token reuse detected — all sessions revoked');
+  void writeOrLog(
+    prisma,
+    {
+      action: AuditAction.AuthRefreshReuse,
+      outcome: 'failure',
+      outcomeReason: 'token-reuse',
+      entityType: 'User',
+      entityId: userId,
+      changedBy: userId,
+    },
+    log,
+  );
+}
 
 const router: Router = express.Router();
 
@@ -36,13 +64,8 @@ router.post(
     const { email, password } = req.body as RegisterRequest;
 
     const user = await UserService.create({ email, password });
-    const payload: JWTPayload = { sub: user.id };
-    const token = jwt.sign(payload, env.JWT_SECRET, {
-      expiresIn: '24h',
-      algorithm: 'HS256',
-      issuer: env.JWT_ISSUER,
-      audience: env.JWT_AUDIENCE,
-    });
+    const token = signAccessToken(user.id);
+    const refreshToken = await RefreshTokenService.issue(user.id);
 
     log.info({ userId: user.id, email: user.email }, 'User registered successfully');
     void writeOrLog(
@@ -60,7 +83,7 @@ router.post(
       },
       log,
     );
-    res.status(201).json({ token });
+    res.status(201).json({ token, refreshToken });
   },
 );
 
@@ -120,13 +143,8 @@ router.post(
       });
     }
 
-    const payload: JWTPayload = { sub: user.id };
-    const token = jwt.sign(payload, env.JWT_SECRET, {
-      expiresIn: '24h',
-      algorithm: 'HS256',
-      issuer: env.JWT_ISSUER,
-      audience: env.JWT_AUDIENCE,
-    });
+    const token = signAccessToken(user.id);
+    const refreshToken = await RefreshTokenService.issue(user.id);
 
     log.info({ userId: user.id, email: user.email }, 'User logged in successfully');
     void writeOrLog(
@@ -140,8 +158,106 @@ router.post(
       },
       log,
     );
-    res.status(200).json({ token });
+    res.status(200).json({ token, refreshToken });
   },
 );
+
+// Exchange a refresh token for a new access token + rotated refresh token.
+// Rotation revokes the presented token on every use; replaying a
+// already-revoked token (or losing the rotation race) is treated as theft and
+// revokes the user's entire token set.
+router.post(
+  '/refresh',
+  refreshLimiter,
+  validate(schemas.refresh),
+  async (req, res: Response<AuthRouteResponse>): Promise<void> => {
+    const { log, id: requestId } = req as RequestWithLogger;
+    const { refreshToken } = req.body as { refreshToken: string };
+
+    const result = await RefreshTokenService.verify(refreshToken);
+
+    // Reuse/theft: a token that was already rotated or explicitly revoked is
+    // being replayed. Revoke everything for the user and refuse.
+    if (result.status === 'revoked') {
+      await revokeAllAndAuditReuse(result.token.userId, log);
+      const error = new InvalidTokenError();
+      res.status(error.statusCode).json({ ...error.toJSON(), requestId });
+      return;
+    }
+
+    // not_found / expired are indistinguishable to the client — generic 401.
+    if (result.status !== 'valid') {
+      const error = new InvalidTokenError();
+      res.status(error.statusCode).json({ ...error.toJSON(), requestId });
+      return;
+    }
+
+    const rotated = await RefreshTokenService.rotate(result.token);
+    if (rotated === null) {
+      // Lost the rotation race: the token was valid at verify time but was
+      // rotated concurrently. Ambiguous between a benign double-submit and
+      // genuine concurrent use — err toward security and revoke all.
+      await revokeAllAndAuditReuse(result.token.userId, log);
+      const error = new InvalidTokenError();
+      res.status(error.statusCode).json({ ...error.toJSON(), requestId });
+      return;
+    }
+
+    const token = signAccessToken(result.token.userId);
+    void writeOrLog(
+      prisma,
+      {
+        action: AuditAction.AuthRefresh,
+        outcome: 'success',
+        entityType: 'User',
+        entityId: result.token.userId,
+        changedBy: result.token.userId,
+      },
+      log,
+    );
+    res.status(200).json({ token, refreshToken: rotated });
+  },
+);
+
+// Revoke the presented refresh token. Does not require a valid access token so
+// a client with an expired access token can still log out. Always responds 200
+// regardless of whether the token existed — no existence oracle.
+router.post(
+  '/logout',
+  refreshLimiter,
+  validate(schemas.logout),
+  async (req, res): Promise<void> => {
+    const { log } = req as RequestWithLogger;
+    const { refreshToken } = req.body as { refreshToken: string };
+
+    const revoked = await RefreshTokenService.revoke(refreshToken);
+    if (revoked) {
+      void writeOrLog(prisma, { action: AuditAction.AuthLogout, outcome: 'success' }, log);
+    }
+    res.status(200).json({ message: 'Logged out' });
+  },
+);
+
+// Revoke every active refresh token for the authenticated user (e.g. "sign out
+// of all devices"). Requires a valid access token to identify the user.
+router.post('/logout-all', writeLimiter, auth, async (req, res): Promise<void> => {
+  const { log } = req as RequestWithLogger;
+  const userId = requireUserId(req);
+
+  const { count } = await RefreshTokenService.revokeAllForUser(userId);
+  void writeOrLog(
+    prisma,
+    {
+      action: AuditAction.AuthLogoutAll,
+      outcome: 'success',
+      entityType: 'User',
+      entityId: userId,
+      changedBy: userId,
+      metadata: { revokedCount: count },
+    },
+    log,
+  );
+  res.status(200).json({ message: 'All sessions logged out', count });
+});
 
 export default router;

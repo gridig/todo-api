@@ -33,8 +33,32 @@ model User {
   createdAt  DateTime @default(now()) @map("created_at")
   updatedAt  DateTime @updatedAt @map("updated_at")
   todos      Todo[]
+  refreshTokens RefreshToken[]
 
   @@map("users")
+}
+
+model RefreshToken {
+  id         String    @id @default(uuid()) @db.Uuid
+  // SHA-256 hex of the opaque refresh token. The raw token (256 bits of
+  // entropy) is returned to the client once and never stored — only this
+  // hash is persisted, so a DB leak can't be replayed as a valid token.
+  tokenHash  String    @unique @map("token_hash")
+  userId     String    @map("user_id") @db.Uuid
+  expiresAt  DateTime  @map("expires_at") @db.Timestamptz
+  createdAt  DateTime  @default(now()) @map("created_at")
+  // Set when the token is rotated (on /auth/refresh) or revoked (logout).
+  // A non-null revokedAt means the token is dead; presenting it again is
+  // treated as reuse/theft.
+  revokedAt  DateTime? @map("revoked_at") @db.Timestamptz
+  // Hash of the token that superseded this one during rotation — lets an
+  // operator walk the rotation chain when investigating a reuse event.
+  replacedByHash String? @map("replaced_by_hash")
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("refresh_tokens")
 }
 
 model AuditEntry {

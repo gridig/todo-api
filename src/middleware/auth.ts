@@ -1,8 +1,7 @@
-import jwt from 'jsonwebtoken';
 import { Request, Response, NextFunction } from 'express';
-import { env } from '../config/env.js';
 import { NoTokenError, InvalidTokenError, InternalServerError } from '../errors/index.js';
 import { requestContext } from '../lib/requestContext.js';
+import { verifyAccessToken } from '../lib/tokens.js';
 import { writeOrLog } from '../lib/auditLog.js';
 import { AuditAction } from '../lib/auditActions.js';
 import prisma from '../lib/prisma.js';
@@ -58,14 +57,11 @@ export const auth = (req: RequestWithLogger, res: Response, next: NextFunction):
     }
 
     // iss/aud are enforced unconditionally: every issued token carries them
-    // (sign side in routes/auth.ts) and the legacy { userId } grace window has
+    // (sign side in lib/tokens.ts) and the legacy { userId } grace window has
     // closed. 5s clockTolerance absorbs small clock drift across instances.
-    const decoded = jwt.verify(token, env.JWT_SECRET, {
-      algorithms: ['HS256'],
-      clockTolerance: 5,
-      issuer: env.JWT_ISSUER,
-      audience: env.JWT_AUDIENCE,
-    });
+    // verifyAccessToken tries the current secret then, during a rotation
+    // window, JWT_SECRET_PREVIOUS.
+    const decoded = verifyAccessToken(token);
 
     if (typeof decoded !== 'object' || decoded === null) {
       throw new Error('Invalid JWT payload');

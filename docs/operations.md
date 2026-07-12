@@ -216,6 +216,43 @@ it invalidates every lookup until all rows are re-hashed. Do it in a maintenance
    and recomputes `email_hash` with the new key (collision-checked). Logins that land mid-run miss until
    their row is rehashed, hence the maintenance window. Rotate this key rarely.
 
+## JWT secret rotation
+
+`JWT_SECRET` signs and verifies every access token (HS256). Rotating it is a SOC 2 CC6.1 key-management
+control. Because access tokens are short-lived and refresh tokens are opaque DB rows (not signed with
+`JWT_SECRET`), a rotation only affects **outstanding access tokens** — a dual-secret verify window keeps
+them valid until they expire, so rotation is zero-downtime.
+
+### Keys and custody
+
+- `JWT_SECRET` — the active signing secret (min 32 chars). Held as a **Railway per-environment secret**
+  (distinct values for `staging` and `production`; never committed).
+- `JWT_SECRET_PREVIOUS` — optional. Set to the **outgoing** secret only during a rotation window. It is
+  honoured on the **verify** side only (`src/lib/tokens.ts` → `verifyAccessToken` tries `JWT_SECRET`
+  first, then `JWT_SECRET_PREVIOUS`); tokens are always **signed** with `JWT_SECRET` alone.
+
+Generate a new secret with `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`.
+Access is governed by Railway's secret-access controls (see [Secrets access policy](configuration.md#secrets-access-policy)).
+
+### Rotation procedure (zero-downtime, dual-secret window)
+
+The window must be **at least `ACCESS_TOKEN_EXPIRY`** (default 15m) so every token signed with the old
+secret has expired before the old secret is removed.
+
+1. **Open the window.** Set `JWT_SECRET_PREVIOUS` to the *current* `JWT_SECRET`, then set `JWT_SECRET`
+   to the newly generated secret. Deploy. From now on new tokens are signed with the new secret; tokens
+   still in flight verify against `JWT_SECRET_PREVIOUS`.
+2. **Wait out the window.** Leave both in place for **> `ACCESS_TOKEN_EXPIRY`** (a few minutes of margin
+   is cheap — e.g. 30m for a 15m expiry). Optionally have every client re-authenticate or refresh.
+3. **Close the window.** Remove `JWT_SECRET_PREVIOUS` (unset it) and deploy. Only the new secret now
+   verifies; any token still bearing the old signature is already expired.
+
+> **Emergency rotation (suspected secret compromise).** Skip the window: set a new `JWT_SECRET` and do
+> **not** set `JWT_SECRET_PREVIOUS`. This immediately invalidates every outstanding access token — all
+> clients get 401 and must re-authenticate. Refresh tokens are unaffected (they aren't signed with
+> `JWT_SECRET`), so a client holding a valid refresh token recovers via `POST /auth/refresh` without a
+> full login. Follow with `POST /auth/logout-all` per affected user if refresh tokens are also suspect.
+
 ## Database restore (disaster recovery)
 
 The TimescaleDB service runs pgBackRest co-located in its container, archiving WAL continuously and

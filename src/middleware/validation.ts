@@ -94,6 +94,18 @@ export const schemas = {
     password: Joi.string().required(),
   }),
 
+  // Opaque refresh token (base64url, ~43 chars for 32 bytes). We only assert
+  // presence + a sane length ceiling — the value's validity is decided by the
+  // hash lookup, not by shape. The cap keeps an oversized body from reaching
+  // the crypto hash.
+  refresh: Joi.object({
+    refreshToken: Joi.string().max(512).required(),
+  }),
+
+  logout: Joi.object({
+    refreshToken: Joi.string().max(512).required(),
+  }),
+
   todo: Joi.object({
     text: Joi.string().trim().min(1).max(500).required(),
   }),

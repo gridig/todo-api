@@ -27,6 +27,26 @@ export interface Todo {
   updatedAt: Date;
 }
 
+export interface RefreshTokenRecord {
+  id: string;
+  tokenHash: string;
+  userId: string;
+  expiresAt: Date;
+  createdAt: Date;
+  revokedAt: Date | null;
+  replacedByHash: string | null;
+}
+
+// Discriminated result of verifying a presented refresh token. `revoked`
+// carries the row so the caller can trigger reuse/theft handling (revoke the
+// user's whole token set); `expired`/`not_found` are indistinguishable to the
+// client (both → 401) but separated here for audit granularity.
+export type RefreshTokenVerifyResult =
+  | { status: 'valid'; token: RefreshTokenRecord }
+  | { status: 'revoked'; token: RefreshTokenRecord }
+  | { status: 'expired' }
+  | { status: 'not_found' };
+
 // ==================== Request Extensions ====================
 
 // Simple version for routes without params
@@ -76,6 +96,7 @@ export interface CreateTodoRequest {
 
 export interface AuthResponse {
   token: string;
+  refreshToken: string;
 }
 
 export interface ErrorResponse {
@@ -137,6 +158,23 @@ export interface TodoServiceInterface {
   delete(params: { id: string; userId: string }): Promise<Todo | null>;
   deleteMany(filter?: { userId?: string }): Promise<{ count: number }>;
   deleteManyByUser(userId: string): Promise<{ count: number }>;
+}
+
+export interface RefreshTokenServiceInterface {
+  // Issue a new refresh token, returning the raw (unhashed) value to hand the
+  // client. Accepts an optional transaction client so issuance can be bundled
+  // atomically with, e.g., user registration.
+  issue(userId: string): Promise<string>;
+  verify(rawToken: string): Promise<RefreshTokenVerifyResult>;
+  // Rotate a verified token: atomically revoke it and issue its successor.
+  // Returns the new raw token, or null if the token was already rotated
+  // concurrently (lost race → caller treats as reuse).
+  rotate(oldToken: RefreshTokenRecord): Promise<string | null>;
+  // Revoke the presented token (logout). Returns true if a live token was revoked.
+  revoke(rawToken: string): Promise<boolean>;
+  revokeAllForUser(userId: string): Promise<{ count: number }>;
+  deleteExpired(): Promise<{ count: number }>;
+  deleteMany(): Promise<{ count: number }>;
 }
 
 // ==================== Error Types ====================

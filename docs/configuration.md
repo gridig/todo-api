@@ -94,6 +94,47 @@ build details: [pgbackrest-implementation.md](pgbackrest-implementation.md).
 | `PGBACKREST_RESTORE`            | `0`                            | `1` = restore into PGDATA before Postgres starts (DR only — see [operations.md](operations.md))                                              |
 | `PGBACKREST_RESTORE_ARGS`       | _(empty)_                      | Extra restore flags, e.g. `--type=time --target=...`, `--delta`                                                                              |
 
+## Secrets access policy
+
+SOC 2 CC6.1 requires documented, least-privilege key management. This is the access policy for the
+platform's secrets.
+
+**Where secrets live.** Production and staging secrets are stored as **Railway per-environment
+variables**, encrypted at rest and scoped per environment (`staging` / `production`) — a staging
+credential cannot read production data. `DATABASE_URL` is injected from Railway's managed Postgres
+reference variable. Deploy tokens (`RAILWAY_TOKEN`) live as **GitHub Environment secrets**, one per
+environment, gated by the `production` environment's required-reviewer rule. Nothing sensitive is
+committed: `.env*` is gitignored (only `.env.example` / `.env.test` placeholders are tracked), and a
+[gitleaks CI job](../.github/workflows/ci.yml) fails the build if a credential is ever committed.
+
+**Inventory of secrets and who may read them.**
+
+| Secret                                                            | Store                        | Who can read                                                        |
+| ----------------------------------------------------------------- | ---------------------------- | ------------------------------------------------------------------ |
+| `JWT_SECRET` (+ `JWT_SECRET_PREVIOUS` during rotation)            | Railway per-env variable     | The running app service; project members with Railway secret access |
+| `DATABASE_URL` / `DATABASE_MIGRATE_URL`                           | Railway managed reference    | The app / migration step; project members with Railway access       |
+| `ENCRYPTION_KEYRING`, `ENCRYPTION_ACTIVE_KEY_ID`, `..._BLIND_INDEX_KEY` | Railway per-env variable | The running app service; project members with Railway secret access |
+| `METRICS_TOKEN`                                                   | Railway per-env variable     | The app; operators scraping `/metrics`                              |
+| `PGBACKREST_CIPHER_PASS` + S3 keys                               | Railway (timescaledb service) | The DB container; project members with Railway access               |
+| `RAILWAY_TOKEN` (staging / production)                            | GitHub Environment secret    | The deploy workflow only; production gated by required reviewer      |
+| `CODECOV_TOKEN`                                                   | GitHub Actions secret        | CI only                                                             |
+
+**Least privilege.** Application code connects as the restricted `db_app` role (no
+UPDATE/DELETE/TRUNCATE on `audit_entries`); only the `db_admin` role used by `prisma migrate deploy`
+can run DDL. See [Database roles](#database-roles). Secrets are referenced indirectly by the runtime
+(env vars pulled at boot), never baked into the deploy artifact.
+
+**Granting / revoking access.** Access is granted by adding a member to the Railway project (for
+runtime/DB secrets) or the GitHub repo/environment (for deploy secrets), and revoked by removing them.
+Rotate any secret the departing member could read — at minimum `JWT_SECRET` (see
+[operations.md → JWT secret rotation](operations.md#jwt-secret-rotation)) and the DB role passwords.
+Review the member list and key access **quarterly** alongside the restore-drill cadence.
+
+> **CC6.2 read-side-audit gap (accepted).** Railway env-var stores gate and encrypt secrets but do not
+> log _who read a secret and when_. A managed KMS (AWS Secrets Manager, Vault) would close this; it is
+> deferred, and the `KeyProvider` interface keeps that migration cheap. Tracked under the Secrets
+> Management roadmap item.
+
 ## Optional Variables
 
 ### Application
@@ -103,6 +144,16 @@ build details: [pgbackrest-implementation.md](pgbackrest-implementation.md).
 | `PORT`        | Port   | `3001`        | Server port number                                                                                                                                                        |
 | `NODE_ENV`    | String | `development` | Environment (development/production/test)                                                                                                                                 |
 | `TRUST_PROXY` | Number | `1`           | Trusted proxy hop count (Express `trust proxy`). Railway / single LB = `1`; add one per extra fronting proxy. Too high lets clients spoof `req.ip` via `X-Forwarded-For`. |
+
+### Authentication
+
+| Variable                    | Type   | Default            | Description                                                                                                                                                              |
+| --------------------------- | ------ | ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `JWT_ISSUER`                | String | `todo-api`         | JWT `iss` claim. Set the same value on the sign and verify sides.                                                                                                       |
+| `JWT_SECRET_PREVIOUS`       | String | _(unset)_          | Previous signing secret, accepted on **verify only** during a rotation window so in-flight tokens survive the cutover. **Minimum 32 chars** when set. Clear it after `ACCESS_TOKEN_EXPIRY` elapses. See [operations.md → JWT secret rotation](operations.md#jwt-secret-rotation). |
+| `JWT_AUDIENCE`              | String | `todo-api-clients` | JWT `aud` claim. Set the same value on the sign and verify sides.                                                                                                       |
+| `ACCESS_TOKEN_EXPIRY`       | String | `15m`              | Access-token lifetime (`jsonwebtoken` `expiresIn`, e.g. `15m`, `1h`). Kept short because stateless JWTs cannot be individually revoked — refresh tokens cover sessions. |
+| `REFRESH_TOKEN_EXPIRY_DAYS` | Number | `30`               | Refresh-token lifetime in days. Refresh tokens rotate on every `POST /auth/refresh`; this absolute cap bounds a stolen-but-unused token.                                |
 
 ### Logging
 
@@ -352,6 +403,8 @@ DATABASE_MIGRATE_URL=postgresql://db_admin:db_admin_dev@localhost:5432/todo_api
 
 # JWT (minimum 32 characters — server fails to start otherwise)
 JWT_SECRET=your-super-secret-jwt-key-change-this-in-production
+# ACCESS_TOKEN_EXPIRY=15m       # Access-token lifetime. Keep short.
+# REFRESH_TOKEN_EXPIRY_DAYS=30  # Refresh-token lifetime in days (rotated on every /auth/refresh).
 
 # Field-level encryption (users.email). Placeholders below are 32 zero bytes —
 # production refuses to boot on them. Generate real keys:

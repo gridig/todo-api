@@ -3,6 +3,12 @@ export const AuditAction = {
   AuthLogin: 'auth.login',
   AuthTokenInvalid: 'auth.token.invalid',
   AuthNoToken: 'auth.token.missing',
+  AuthRefresh: 'auth.refresh',
+  AuthLogout: 'auth.logout',
+  AuthLogoutAll: 'auth.logout.all',
+  // Security event: a revoked refresh token was presented again — treated as
+  // token theft, triggering revocation of the user's entire token set.
+  AuthRefreshReuse: 'auth.refresh.reuse',
 
   AccessDenied: 'access.denied',
 

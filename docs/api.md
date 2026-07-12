@@ -23,9 +23,15 @@ Base URL: `http://localhost:3001`
 
 ```json
 {
-  "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+  "token": "<access-token-jwt>",
+  "refreshToken": "<refresh-token>"
 }
 ```
+
+- `token` — short-lived access token (default 15m). Send as `Authorization: Bearer <token>`.
+- `refreshToken` — opaque long-lived token (default 30 days). Store it securely and exchange it at
+  `POST /auth/refresh` for a new access token when the access token expires. Returned **once** — only
+  a hash is stored server-side.
 
 **Validation Rules**:
 
@@ -53,7 +59,8 @@ Base URL: `http://localhost:3001`
 
 ```json
 {
-  "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+  "token": "<access-token-jwt>",
+  "refreshToken": "<refresh-token>"
 }
 ```
 
@@ -69,6 +76,87 @@ Base URL: `http://localhost:3001`
     }
   },
   "requestId": "abc123"
+}
+```
+
+---
+
+### Refresh Access Token
+
+**POST** `/auth/refresh`
+
+Exchange a refresh token for a new access token. **Rotating**: each call returns a new refresh token
+and invalidates the one presented — always store the newly returned `refreshToken`.
+
+**Rate Limit**: 60 requests per 15 minutes (per IP)
+
+**Request Body**:
+
+```json
+{
+  "refreshToken": "<refresh-token>"
+}
+```
+
+**Response** (200 OK):
+
+```json
+{
+  "token": "<access-token-jwt>",
+  "refreshToken": "<rotated-refresh-token>"
+}
+```
+
+**Error Response** (401 Unauthorized): `INVALID_TOKEN` when the refresh token is unknown, expired, or
+revoked. **Theft protection**: presenting a token that was already rotated (reuse) revokes **every**
+refresh token for that user — all sessions must re-authenticate.
+
+---
+
+### Logout
+
+**POST** `/auth/logout`
+
+Revoke the presented refresh token. Does not require an access token, so a client with an expired
+access token can still log out. Always responds 200 (no token-existence oracle).
+
+**Rate Limit**: 60 requests per 15 minutes (per IP)
+
+**Request Body**:
+
+```json
+{
+  "refreshToken": "<refresh-token>"
+}
+```
+
+**Response** (200 OK):
+
+```json
+{
+  "message": "Logged out"
+}
+```
+
+---
+
+### Logout All Sessions
+
+**POST** `/auth/logout-all`
+
+Revoke **every** active refresh token for the authenticated user (e.g. "sign out of all devices").
+Requires a valid access token.
+
+**Auth**: `Authorization: Bearer <token>`
+
+**Rate Limit**: 30 requests per minute (per IP)
+
+**Response** (200 OK):
+
+```json
+{
+  "message": "All sessions logged out",
+  "count": 3
 }
 ```
 

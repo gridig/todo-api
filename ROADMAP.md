@@ -6,25 +6,6 @@ This document outlines the infrastructure and production-readiness work required
 
 ## HIGH PRIORITY (Production Critical)
 
-### Secrets Management **[SOC 2]**
-
-**Priority**: High
-**Effort**: Low
-**Impact**: High
-**SOC 2**: CC6.1 (Logical Access Security — Key Management), CC6.7 (Encryption in Transit)
-
-`JWT_SECRET`, `DATABASE_URL`, `METRICS_TOKEN`, and any future API keys must not live as plaintext in CI logs, committed config, or `.env` files. SOC 2 CC6.1 requires documented key management controls with least-privilege access.
-
-- [ ] Store production secrets in an at-rest-encrypted, access-controlled secret store — not in plaintext config files or task definitions **[SOC 2]**
-- [ ] Reference secrets indirectly from the deploy artifact (env var pulled from the secret store at runtime, ARN/reference indirection) so secrets do not appear in the artifact itself
-- [ ] Define and document a rotation runbook for `JWT_SECRET` covering at least `ACCESS_TOKEN_EXPIRY` dual-secret window so in-flight tokens stay valid mid-rotation
-- [ ] Enforce that `.env` is in `.gitignore`; add a CI pre-commit check (e.g., `git-secrets`, Semgrep) to catch accidental secret commits **[SOC 2]**
-- [ ] Document the secrets access policy in `docs/configuration.md`: which roles can read which secrets, principle of least privilege applied, how access is revoked
-
-**Current implementation:** secrets are stored as deploy-platform environment variables, scoped per environment (`staging`/`production`); `DATABASE_URL` is provided by the platform's managed Postgres reference variable; deploy tokens live as GitHub Environment secrets. This satisfies the at-rest-encryption and per-environment-scoping bullets above; rotation runbook and read-side audit log are the remaining gaps. A future migration to a managed secrets store (AWS Secrets Manager, HashiCorp Vault, Doppler, Infisical) would close the read-side audit gap if SOC 2 CC6.2 requires it.
-
-**Why**: Plaintext secrets are visible to anyone with config/CI-log read access. An encrypted-at-rest secret store with audited access closes the key-management gap SOC 2 CC6.1 auditors specifically look for.
-
 ### User Profile Management **[SOC 2]**
 
 **Priority**: High
@@ -45,28 +26,6 @@ Core profile endpoints with account lifecycle management. No dependency on email
 - [ ] Add tests for all profile operations
 
 **Why**: Users must have control over their profiles and data. Essential for user autonomy, GDPR compliance, and SOC 2 Privacy criteria.
-
-### JWT Refresh + Token Revocation **[SOC 2]**
-
-**Priority**: High
-**Effort**: Medium
-**Impact**: High
-**SOC 2**: CC6.1 (Logical Access), CC6.2 (User Authentication)
-
-Can ship independently of **User Profile Management**. Requires a `RefreshToken` model in the database.
-
-- [ ] Add `RefreshToken` model to the Prisma schema
-- [ ] Implement refresh token mechanism **[SOC 2]**
-- [ ] Add `POST /auth/refresh` endpoint
-- [ ] Implement token rotation (issue new refresh token on each use) **[SOC 2]**
-- [ ] Add refresh token expiration (7-30 days)
-- [ ] Blacklist old refresh tokens
-- [ ] Add `POST /auth/logout` endpoint (revoke current refresh token) **[SOC 2]**
-- [ ] Add `POST /auth/logout-all` endpoint (revoke all user refresh tokens) **[SOC 2]**
-- [ ] Document JWT secret rotation strategy for production **[SOC 2]**
-- [ ] Add tests for token refresh and logout flows
-
-**Why**: Short-lived access tokens with refresh tokens improve security without hurting UX. Token revocation is required for SOC 2 session management. This is independently valuable and has no dependency on user profile endpoints or email services.
 
 ### Email Service Integration
 
@@ -376,12 +335,12 @@ For a SOC 2-compliant production deployment, implement in this order:
 - ~~**Database Connection Resilience**~~ — Startup retry (decorrelated jitter) and runtime Prisma error classification (transient → 503 `DATABASE_UNAVAILABLE` + `Retry-After`) shipped. Optional circuit breaker tracked separately.
 - ~~**Database Backup & DR**~~ — Done: pgBackRest live in prod, RPO/RTO defined, first A1.3 restore drill passed 2026-07-06. See **Completed** below. (Backup-failure alerting moved to **Monitoring & Observability**.)
 - ~~**Encryption at Rest**~~ — Done: application-layer AES-256-GCM field encryption of `users.email` + keyed HMAC blind index, env-var keyring (KMS-ready), rotation runbook. Backups already encrypted; volume encryption documented (Railway-managed; TDE N/A on self-hosted TimescaleDB). See **Completed** below.
-- **Secrets Management** — Encrypted-at-rest secret store, indirection from deploy artifact, rotation runbook
+- ~~**Secrets Management**~~ — Done: per-environment encrypted-at-rest secret store (Railway) with indirection, JWT_SECRET rotation runbook (dual-secret window), gitleaks CI secret-scan, and documented secrets access policy. See **Completed** below. (Managed-KMS read-side audit remains optional/deferred.)
 
 ### Phase B: Authentication & Access Control (SOC 2 blocking)
 
 - **User Profile Management** — Core profile, account deletion, data export
-- **JWT Refresh + Token Revocation** — Refresh tokens, logout, token rotation (independent of User Profile Management)
+- ~~**JWT Refresh + Token Revocation**~~ — Done: rotating refresh tokens, `/auth/refresh`, `/auth/logout`, `/auth/logout-all`, reuse/theft detection. See **Completed** below.
 - **Role-Based Access Control (RBAC)** — Role-based access, admin/user separation (uses `ForbiddenError` from `errors/index.ts`)
 
 ### Phase C: Observability & Compliance (SOC 2 blocking)
@@ -408,6 +367,53 @@ Items tagged **[SOC 2]** in Phases A–C must be completed before the SOC 2 Type
 ---
 
 ## Completed
+
+### JWT Refresh + Token Revocation **[SOC 2]** — done 2026-07-12
+
+**SOC 2**: CC6.1 (Logical Access), CC6.2 (User Authentication).
+
+Access tokens are now short-lived (`ACCESS_TOKEN_EXPIRY`, default 15m) and paired with opaque,
+rotating refresh tokens:
+
+- **`RefreshToken` model** (`prisma/schema.prisma`, migration `20260712000000_add_refresh_tokens`) —
+  stores only a **SHA-256 hash** of the 256-bit random token; raw token returned to the client once.
+  FK-cascades on user delete.
+- **Endpoints** (`src/routes/auth.ts`): register/login now return `{ token, refreshToken }`;
+  `POST /auth/refresh` (rotating — revokes the presented token, issues a successor),
+  `POST /auth/logout` (revoke current), `POST /auth/logout-all` (revoke all for the user).
+- **Rotation + theft detection** (`src/models/RefreshToken.ts`): every refresh rotates the token;
+  replaying a revoked token (or losing the guarded rotation race) revokes the user's **entire** token
+  set and emits an `auth.refresh.reuse` audit event.
+- **Token helper** (`src/lib/tokens.ts`): single source of truth for access-token signing +
+  verification; `verifyAccessToken` supports the dual-secret rotation window.
+- Tests: `__tests__/integration/auth/{refresh,logout,logout-all}.test.ts` + `__tests__/unit/lib/tokens.test.ts`.
+
+**Carried into other tracks (not blockers here):**
+
+- **Expired-token cleanup** — `RefreshTokenService.deleteExpired()` exists but is not yet scheduled; a
+  cron/interval job can drain expired rows later (revoked-but-unexpired rows are kept so reuse detection
+  still matches).
+
+### Secrets Management **[SOC 2]** — done 2026-07-12
+
+**SOC 2**: CC6.1 (Logical Access Security — Key Management).
+
+Secrets live as **Railway per-environment variables** (encrypted at rest, scoped `staging`/`production`),
+referenced indirectly by the runtime; deploy tokens are GitHub Environment secrets gated by required
+reviewers. Closing gaps completed here:
+
+- **JWT_SECRET rotation runbook** — zero-downtime dual-secret window (`JWT_SECRET_PREVIOUS` accepted on
+  verify only) + emergency-rotation path. [operations.md → JWT secret rotation](docs/operations.md#jwt-secret-rotation);
+  code in `src/lib/tokens.ts` (`verifyAccessToken`) and `src/config/env.ts`.
+- **CI secret scan** — gitleaks job in [`.github/workflows/ci.yml`](.github/workflows/ci.yml) with a
+  `.gitleaks.toml` allowlist for committed dev fixtures; fails the build on any committed credential.
+- **Secrets access policy** — inventory of every secret, who may read it, and grant/revoke procedure in
+  [configuration.md → Secrets access policy](docs/configuration.md#secrets-access-policy).
+
+**Carried into other tracks (not blockers here):**
+
+- **Read-side key-access audit (CC6.2)** — env-var stores don't log key reads; a managed KMS (AWS Secrets
+  Manager, Vault) would close this. Deferred/optional; the `KeyProvider` interface keeps the migration cheap.
 
 ### Encryption at Rest **[SOC 2]** — done 2026-07-09
 
