@@ -9,7 +9,8 @@ import {
   refreshTokenExpiry,
 } from '@/lib/tokens.js';
 
-const PREV_SECRET = 'previous-rotation-secret-at-least-32-chars-long';
+// Test-only fixture, not a real credential.
+const PREV_SECRET = 'previous-rotation-secret-at-least-32-chars-long'; // gitleaks:allow
 
 // Sign a token with an explicit secret, mirroring production claims (iss/aud)
 // so verifyAccessToken's claim checks pass.

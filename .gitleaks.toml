@@ -15,6 +15,10 @@ paths = [
   '''\.env\.test$''',
   '''prisma/sql/bootstrap_roles.*\.sql$''',
   '''docker-compose\.ya?ml$''',
+  # Synthetic AES/HMAC key fixtures for the crypto unit tests — not real keys.
+  '''__tests__/setup\.ts$''',
+  '''__tests__/unit/config/env-production\.test\.ts$''',
+  '''__tests__/unit/lib/fieldCrypto\.test\.ts$''',
 ]
 
 # Known placeholder strings that appear across docs and fixtures. These are not

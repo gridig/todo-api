@@ -23,8 +23,8 @@ Base URL: `http://localhost:3001`
 
 ```json
 {
-  "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
-  "refreshToken": "8xQ...opaque-base64url..."
+  "token": "<access-token-jwt>",
+  "refreshToken": "<refresh-token>"
 }
 ```
 
@@ -59,8 +59,8 @@ Base URL: `http://localhost:3001`
 
 ```json
 {
-  "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
-  "refreshToken": "8xQ...opaque-base64url..."
+  "token": "<access-token-jwt>",
+  "refreshToken": "<refresh-token>"
 }
 ```
 
@@ -94,7 +94,7 @@ and invalidates the one presented — always store the newly returned `refreshTo
 
 ```json
 {
-  "refreshToken": "8xQ...opaque-base64url..."
+  "refreshToken": "<refresh-token>"
 }
 ```
 
@@ -102,8 +102,8 @@ and invalidates the one presented — always store the newly returned `refreshTo
 
 ```json
 {
-  "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
-  "refreshToken": "New...rotated-token..."
+  "token": "<access-token-jwt>",
+  "refreshToken": "<rotated-refresh-token>"
 }
 ```
 
@@ -126,7 +126,7 @@ access token can still log out. Always responds 200 (no token-existence oracle).
 
 ```json
 {
-  "refreshToken": "8xQ...opaque-base64url..."
+  "refreshToken": "<refresh-token>"
 }
 ```
 
