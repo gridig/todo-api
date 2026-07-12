@@ -358,16 +358,14 @@ Self-service account management. All `/user` endpoints require authentication vi
 
 **Rate Limit**: 30 requests per minute
 
-Update the display name and/or email. At least one of `name`/`email` must be provided. **Changing the
-email requires the current password** (re-authentication); a name-only change does not.
+Update the display name. (Email is changed via its own endpoint — see **Change Email** — because it requires
+re-authentication.)
 
 **Request Body**:
 
 ```json
 {
-  "name": "Ada Lovelace",
-  "email": "ada.new@example.com",
-  "currentPassword": "CurrentPass123!"
+  "name": "Ada Lovelace"
 }
 ```
 
@@ -375,12 +373,39 @@ email requires the current password** (re-authentication); a name-only change do
 
 **Validation Rules**:
 
-- `name`: 1-100 characters, trimmed
-- `email`: valid email, max 72 characters
-- `currentPassword`: required if and only if `email` is present
+- `name`: 1-100 characters, trimmed (required)
 
-**Errors**: `400 VALIDATION_ERROR` (empty patch, or email without `currentPassword`),
-`401 INVALID_CREDENTIALS` (wrong current password), `409 DUPLICATE_EMAIL` (email already in use).
+**Errors**: `400 VALIDATION_ERROR` (missing/invalid name).
+
+---
+
+### Change Email
+
+**PATCH** `/user/me/email`
+
+**Rate Limit**: 30 requests per minute
+
+Changes the account email. **Requires the current password** (re-authentication against a stolen access
+token). The email is re-encrypted at rest and its blind index rotated.
+
+**Request Body**:
+
+```json
+{
+  "email": "ada.new@example.com",
+  "currentPassword": "CurrentPass123!"
+}
+```
+
+**Response** (200 OK): the updated profile.
+
+**Validation Rules**:
+
+- `email`: valid email, max 72 characters (required)
+- `currentPassword`: required
+
+**Errors**: `400 VALIDATION_ERROR` (missing email/password), `401 INVALID_CREDENTIALS` (wrong current
+password), `409 DUPLICATE_EMAIL` (email already in use).
 
 ---
 

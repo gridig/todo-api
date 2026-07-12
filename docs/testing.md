@@ -91,9 +91,12 @@ Run `pnpm run test:coverage` to generate a report.
 | `generateUniqueId()`     | Returns a `crypto.randomUUID()` for test isolation                |
 | `createTestApp()`        | Returns the Express `Application` instance                        |
 | `createTestUser(email?)` | Creates a user + JWT token, returns `{ user, authToken, userId }` |
+| `createTestAdmin(email?)`| Like `createTestUser`, then sets the user's role to `admin` (same return shape) — use for `/admin` route tests |
 | `connectTestDB()`        | Connects Prisma to the test database                              |
-| `disconnectTestDB()`     | Disconnects Prisma and closes the connection pool                 |
-| `cleanupTestData()`      | Deletes all todos then all users (respects FK constraints)        |
+| `disconnectTestDB()`     | Disconnects Prisma and closes the connection pool (incl. the privileged audit-admin pool) |
+| `cleanupTestData()`      | Deletes refresh tokens, then todos, then users (respects FK constraints) |
+| `truncateAuditEntries()` | `TRUNCATE audit_entries` via a privileged admin pool — the runtime `db_app` role can't; call in `afterEach` for suites asserting on audit rows |
+| `pollForAuditRow(where, params?)` | Polls `audit_entries` for a matching row (audit writes are fire-and-forget, so the row may lag the HTTP response) |
 
 ### `todoHelpers.ts`
 

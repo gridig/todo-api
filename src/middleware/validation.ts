@@ -112,18 +112,21 @@ export const schemas = {
     refreshToken: Joi.string().max(512).required(),
   }),
 
-  // Profile update: at least one of name/email. An email change requires the
-  // current password (re-auth against account takeover via a stolen access
-  // token) — enforced here so the handler can assume it is present.
+  // Profile update: display name only. Email lives on its own endpoint
+  // (PATCH /user/me/email) so its re-auth check is unconditional — a security
+  // check gated by request data trips static analysis (user-controlled bypass)
+  // and reads as a bypass even though it isn't.
   updateProfile: Joi.object({
-    name: nameSchema,
-    email: emailSchema,
-    currentPassword: Joi.string().when('email', {
-      is: Joi.exist(),
-      then: Joi.required(),
-      otherwise: Joi.forbidden(),
-    }),
-  }).or('name', 'email'),
+    name: nameSchema.required(),
+  }),
+
+  // Email change requires the current password (re-auth against account takeover
+  // via a stolen access token). Both fields are always required, so the handler
+  // verifies unconditionally.
+  changeEmail: Joi.object({
+    email: emailSchema.required(),
+    currentPassword: Joi.string().required(),
+  }),
 
   changePassword: Joi.object({
     currentPassword: Joi.string().required(),

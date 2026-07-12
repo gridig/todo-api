@@ -31,8 +31,10 @@ router.get('/me', auth, readLimiter, async (req, res: Response): Promise<void> =
   res.json(profile);
 });
 
-// PATCH profile: name and/or email. An email change re-authenticates with the
-// current password (validation guarantees currentPassword is present iff email is).
+// PATCH profile: display name. No credential check — a name change is not
+// credential-sensitive. Email is a separate endpoint (below) with its own
+// unconditional re-auth, so this handler never gates a security check on
+// request data.
 router.patch(
   '/me',
   auth,
@@ -41,23 +43,32 @@ router.patch(
   async (req, res: Response): Promise<void> => {
     const { log } = req as RequestWithLogger;
     const userId = requireUserId(req);
-    const { name, email, currentPassword } = req.body as {
-      name?: string;
-      email?: string;
-      currentPassword?: string;
-    };
+    const { name } = req.body as { name: string };
 
-    if (email !== undefined) {
-      const ok = currentPassword ? await UserService.verifyPassword(userId, currentPassword) : false;
-      if (!ok) throw new InvalidCredentialsError();
-    }
+    const updated = await UserService.updateProfile(userId, { name });
+    log.info({ userId }, 'User display name updated');
+    res.json(updated);
+  },
+);
 
-    const patch: { name?: string; email?: string } = {};
-    if (name !== undefined) patch.name = name;
-    if (email !== undefined) patch.email = email;
+// PATCH email: credential-sensitive, so it re-authenticates with the current
+// password. Verification is unconditional — both fields are required by the
+// schema — so there is no request-controlled path that skips the check.
+router.patch(
+  '/me/email',
+  auth,
+  writeLimiter,
+  validate(schemas.changeEmail),
+  async (req, res: Response): Promise<void> => {
+    const { log } = req as RequestWithLogger;
+    const userId = requireUserId(req);
+    const { email, currentPassword } = req.body as { email: string; currentPassword: string };
 
-    const updated = await UserService.updateProfile(userId, patch);
-    log.info({ userId, fields: Object.keys(patch), emailChanged: email !== undefined }, 'User profile updated');
+    const ok = await UserService.verifyPassword(userId, currentPassword);
+    if (!ok) throw new InvalidCredentialsError();
+
+    const updated = await UserService.updateProfile(userId, { email });
+    log.info({ userId }, 'User email updated');
     res.json(updated);
   },
 );

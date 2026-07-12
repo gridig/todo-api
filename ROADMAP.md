@@ -363,12 +363,13 @@ Self-service account lifecycle under a new `/user` router (`src/routes/user.ts`,
 - **`name` field** — added to the `User` model (`prisma/schema.prisma`, migration
   `20260712154802_add_user_name`); nullable `VarChar(100)`, stored plaintext (the field-encryption layer
   is deliberately scoped to `email`, the identifying PII with a blind-index lookup).
-- **Endpoints** — `GET /user/me` (profile), `PATCH /user/me` (name/email; an email change re-encrypts the
-  ciphertext column, rotates the blind index, and requires the current password), `PATCH /user/me/password`
-  (verifies current password, then rotates it and **revokes every refresh token** atomically),
-  `DELETE /user/me` (re-auth, then audit-then-delete in one transaction — todos and refresh tokens cascade
-  away, the `user.delete` audit row is retained), `GET /user/me/export` (profile + all todos as a JSON
-  download; audited).
+- **Endpoints** — `GET /user/me` (profile), `PATCH /user/me` (display name), `PATCH /user/me/email`
+  (re-authenticates with the current password, then re-encrypts the ciphertext column and rotates the blind
+  index — a dedicated endpoint so the re-auth is unconditional, not a request-gated check),
+  `PATCH /user/me/password` (verifies current password, then rotates it and **revokes every refresh token**
+  atomically), `DELETE /user/me` (re-auth, then audit-then-delete in one transaction — todos and refresh
+  tokens cascade away, the `user.delete` audit row is retained), `GET /user/me/export` (profile + all todos
+  as a JSON download; audited).
 - **Service** (`src/models/User.ts`) — `findById`, `verifyPassword`, `updateProfile` (P2002 →
   `DuplicateEmailError`), `changePassword`, `deleteAccount`; all mutations audit inside `prisma.$transaction`
   (mirrors `TodoService`). New `TodoService.findAllByUser` backs the export.
