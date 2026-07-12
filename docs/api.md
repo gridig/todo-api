@@ -476,6 +476,92 @@ access is recorded in the audit log.
 
 ---
 
+## Admin
+
+Administrative user management. All `/admin` endpoints require authentication **and** the `admin` role.
+Requests from a non-admin return `403 FORBIDDEN` and are recorded in the audit log.
+
+### Roles & permissions
+
+| Role | Capabilities |
+| ------- | ---------------------------------------------------------------------------------------- |
+| `user` | Default. Full access to their own todos and profile (`/todos`, `/user/me`). No `/admin`. |
+| `admin` | Everything a `user` can do for their own account, **plus** the `/admin` surface below. |
+
+Role is stored on the user (`users.role`, default `user`) and checked by a per-request lookup — it is
+**not** carried in the JWT, so a role change takes effect immediately. The first admin is created out-of-band
+with `scripts/promote-admin.ts` (see [operations.md](operations.md)); thereafter admins manage roles via
+`PATCH /admin/users/:id/role`. An admin cannot change their own role or delete their own account through the
+admin API (use `/user/me` for self-service).
+
+### List Users
+
+**GET** `/admin/users`
+
+**Auth**: `Authorization: Bearer <token>` (admin) · **Rate Limit**: 100 requests per minute
+
+**Query Parameters**: same as `GET /todos` — `limit` (1-100, default 20) and `cursor` (UUID).
+
+**Response** (200 OK):
+
+```json
+{
+  "data": [
+    {
+      "id": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
+      "name": "Ada Lovelace",
+      "email": "ada@example.com",
+      "role": "user",
+      "createdAt": "2024-01-15T10:30:00.000Z",
+      "updatedAt": "2024-01-15T10:30:00.000Z"
+    }
+  ],
+  "meta": { "nextCursor": "…", "hasMore": true }
+}
+```
+
+---
+
+### Get User
+
+**GET** `/admin/users/:id`
+
+**Auth**: admin · **Rate Limit**: 100 requests per minute
+
+**Response** (200 OK): a single user (same shape as a list row). `404 USER_NOT_FOUND` if the id does not exist.
+
+---
+
+### Change User Role
+
+**PATCH** `/admin/users/:id/role`
+
+**Auth**: admin · **Rate Limit**: 30 requests per minute
+
+**Request Body**:
+
+```json
+{ "role": "admin" }
+```
+
+**Response** (200 OK): the updated user. **Errors**: `400 VALIDATION_ERROR` (role not `user`/`admin`),
+`403 FORBIDDEN` (changing your own role), `404 USER_NOT_FOUND`.
+
+---
+
+### Delete User
+
+**DELETE** `/admin/users/:id`
+
+**Auth**: admin · **Rate Limit**: 30 requests per minute
+
+Permanently deletes the target user; their todos and refresh tokens cascade-delete and the action is audited
+(`admin.user.delete`).
+
+**Response** (204 No Content). **Errors**: `403 FORBIDDEN` (deleting your own account), `404 USER_NOT_FOUND`.
+
+---
+
 ## Health Check
 
 Health check endpoints for monitoring and container orchestration. These endpoints are **not rate limited** to ensure load balancers can always reach them.
@@ -801,6 +887,7 @@ All error responses follow a structured format with error codes for client-side 
 | `INVALID_TOKEN`          | 401         | Token is invalid or expired                                       |
 | `TODO_NOT_FOUND`         | 404         | Todo does not exist or belongs to another user                    |
 | `USER_NOT_FOUND`         | 404         | Authenticated user's account no longer exists                     |
+| `FORBIDDEN`              | 403         | Authenticated but not authorized (e.g. admin role required)       |
 | `ROUTE_NOT_FOUND`        | 404         | API endpoint does not exist                                       |
 | `DUPLICATE_EMAIL`        | 409         | Email already registered                                          |
 | `DUPLICATE_VALUE`        | 409         | Unique constraint violation                                       |

@@ -33,12 +33,19 @@ model User {
   // no equality lookup, so it is stored as plaintext (unlike the encrypted
   // email column). Nullable — existing rows and registration don't set it.
   name       String?  @db.VarChar(100)
+  // Authorization role. Plain String (not a PG enum) so db_app needs no TYPE
+  // USAGE grant; a CHECK (role IN ('user','admin')) constraint enforces the
+  // domain at the DB layer — added in raw migration SQL, so `prisma migrate
+  // diff` (schema-to-schema) never sees it. App-side domain: UserRole union.
+  role       String   @default("user")
   password   String
   createdAt  DateTime @default(now()) @map("created_at")
   updatedAt  DateTime @updatedAt @map("updated_at")
   todos      Todo[]
   refreshTokens RefreshToken[]
 
+  // Backs the admin user listing (ORDER BY created_at DESC, cursor on id).
+  @@index([createdAt])
   @@map("users")
 }
 

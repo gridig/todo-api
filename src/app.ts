@@ -3,6 +3,7 @@ import helmet from 'helmet';
 import authRoutes from './routes/auth.js';
 import todoRoutes from './routes/todos.js';
 import userRoutes from './routes/user.js';
+import adminRoutes from './routes/admin.js';
 import { globalLimiter } from './middleware/rateLimiter.js';
 import { requestIdMiddleware } from './middleware/requestId.js';
 import { requestContextMiddleware } from './middleware/requestContext.js';
@@ -71,6 +72,7 @@ export const createApp = (): Application => {
   app.use('/auth', authRoutes);
   app.use('/todos', todoRoutes);
   app.use('/user', userRoutes);
+  app.use('/admin', adminRoutes);
 
   // 404 handler - catches routes that don't exist
   app.use((req: RequestWithLogger, res: Response) => {

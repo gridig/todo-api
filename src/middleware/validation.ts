@@ -134,6 +134,11 @@ export const schemas = {
     currentPassword: Joi.string().required(),
   }),
 
+  // Admin role change. Domain mirrors the users_role_check DB constraint.
+  updateRole: Joi.object({
+    role: Joi.string().valid('user', 'admin').required(),
+  }),
+
   todo: Joi.object({
     text: Joi.string().trim().min(1).max(500).required(),
   }),

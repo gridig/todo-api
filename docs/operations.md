@@ -216,6 +216,39 @@ it invalidates every lookup until all rows are re-hashed. Do it in a maintenance
    and recomputes `email_hash` with the new key (collision-checked). Logins that land mid-run miss until
    their row is rehashed, hence the maintenance window. Rotate this key rarely.
 
+## Promoting an admin (RBAC bootstrap)
+
+Roles are `user` (default) and `admin`; only admins may reach `/admin`. Since you cannot use the admin API
+without already being an admin, the **first** admin is created out-of-band with an operator script, and role
+changes thereafter go through `PATCH /admin/users/:id/role`.
+
+```bash
+pnpm build
+node dist/scripts/promote-admin.js alice@example.com                    # → admin (default)
+node dist/scripts/promote-admin.js bob@example.com --role=user          # demote back to user
+node dist/scripts/promote-admin.js bob@example.com --role=user --force  # demote even the last admin
+```
+
+This is a **privileged operator procedure** — it grants/revokes admin. Its security boundary is the
+`db_admin` credential it needs (whoever holds that can already change roles with raw SQL); restrict that
+credential accordingly and expect this to be run rarely (bootstrap + break-glass). It is auditable: every
+change writes an `admin.user.role.change` row to `audit_entries` with `metadata.via = "promote-admin-script"`,
+so script grants show up in the same access-review query as API grants.
+
+- Requires the app env present — it imports the crypto layer to compute the email **blind index**
+  (`users.email` is encrypted, so the lookup is `WHERE email_hash = blindIndex(email)`, not by raw email).
+  So `ENCRYPTION_KEYRING` / `ENCRYPTION_ACTIVE_KEY_ID` / `ENCRYPTION_BLIND_INDEX_KEY` must match the target
+  environment, or the hash won't match any row.
+- Connects via `DATABASE_MIGRATE_URL` (the `db_admin` role) with a `DATABASE_URL` fallback, like the
+  migrations. It prints the target `host/db` before mutating (catch a mis-pointed env by eye), and exits `1`
+  (with a message) if no user matches the email.
+- **Last-admin guard:** it refuses to demote the only remaining admin (which would lock everyone out of
+  `/admin`); pass `--force` to override. A no-op change (already the requested role) exits `0` without writing.
+- On Railway: `railway run --service todo-api node dist/scripts/promote-admin.js <email>` so the service's
+  env (DB DSN + encryption keys) is injected.
+- Role is checked per request (not carried in the JWT), so a promotion/demotion takes effect immediately —
+  no re-login required to gain access, and a demotion revokes admin access on the next request.
+
 ## JWT secret rotation
 
 `JWT_SECRET` signs and verifies every access token (HS256). Rotating it is a SOC 2 CC6.1 key-management

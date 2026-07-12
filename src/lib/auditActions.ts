@@ -18,6 +18,11 @@ export const AuditAction = {
   UserDelete: 'user.delete',
   UserExport: 'user.export',
 
+  // Administrative actions (routes/admin.ts). Emitted inside $transaction so an
+  // audit failure rolls back the privileged action.
+  AdminUserRoleChange: 'admin.user.role.change',
+  AdminUserDelete: 'admin.user.delete',
+
   TodoCreate: 'todo.create',
   TodoUpdate: 'todo.update',
   TodoDelete: 'todo.delete',

@@ -62,26 +62,6 @@ The Prometheus metrics endpoint is already implemented — see `middleware/metri
 
 ## MEDIUM PRIORITY (Pre-Production Recommended)
 
-### Role-Based Access Control (RBAC) **[SOC 2]**
-
-**Priority**: Medium
-**Effort**: Medium
-**Impact**: High
-**SOC 2**: CC6.1 (Principle of Least Privilege), CC6.3 (Role-Based Access)
-
-Currently all authenticated users have identical permissions. SOC 2 requires principle of least privilege and admin/user separation.
-
-- [ ] Add `role` field to User model (`user` | `admin`, default `user`) **[SOC 2]**
-- [ ] Create authorization middleware that checks `role` **[SOC 2]**
-- [ ] Separate admin endpoints from user endpoints **[SOC 2]**
-- [ ] Ensure regular users cannot access admin operations
-- [ ] Add `role` to JWT payload or fetch on each request
-- [ ] Add tests for role-based authorization
-- [ ] Document role definitions and their permissions
-- [ ] **Emit audit-log entries for administrative actions** **[SOC 2]** — add an `admin.*` family of actions to `lib/auditActions.ts` (e.g. `admin.user.role.change`, `admin.user.delete`); wire emissions at each admin endpoint inside `prisma.$transaction` so an audit failure rolls back the privileged action. Migrated from the (now-deleted) Audit Logging roadmap section because the audit infrastructure is already shipped — this remaining bullet only becomes actionable once admin endpoints exist.
-
-**Why**: SOC 2 CC6.1 requires principle of least privilege. CC6.3 requires role-based access controls. Auditors expect to see a clear separation between administrative and standard user capabilities.
-
 ### SOC 2 Compliance Documentation **[SOC 2]**
 
 **Priority**: Medium
@@ -320,7 +300,7 @@ For a SOC 2-compliant production deployment, implement in this order:
 
 - ~~**User Profile Management**~~ — Done: `/user/me` profile read/update, password change (revokes all refresh tokens), account deletion (cascade + audit), data export. See **Completed** below.
 - ~~**JWT Refresh + Token Revocation**~~ — Done: rotating refresh tokens, `/auth/refresh`, `/auth/logout`, `/auth/logout-all`, reuse/theft detection. See **Completed** below.
-- **Role-Based Access Control (RBAC)** — Role-based access, admin/user separation (uses `ForbiddenError` from `errors/index.ts`)
+- ~~**Role-Based Access Control (RBAC)**~~ — Done: `user`/`admin` role, `requireRole` guard, `/admin` user-management surface, `admin.*` audit, `promote-admin` bootstrap script. See **Completed** below.
 
 ### Phase C: Observability & Compliance (SOC 2 blocking)
 
@@ -346,6 +326,33 @@ Items tagged **[SOC 2]** in Phases A–C must be completed before the SOC 2 Type
 ---
 
 ## Completed
+
+### Role-Based Access Control (RBAC) **[SOC 2]** — done 2026-07-12
+
+**SOC 2**: CC6.1 (Least Privilege), CC6.3 (Role-Based Access).
+
+Two roles (`user` default, `admin`) with a separated administrative surface:
+
+- **`role` column** — `users.role` (`prisma/schema.prisma`, migration `20260712163507_add_user_role`);
+  plain `String` (not a PG enum, so `db_app` needs no TYPE USAGE grant) with a hand-added
+  `CHECK (role IN ('user','admin'))` in raw SQL; app-side domain is the `UserRole` union. Users list index
+  `@@index([createdAt])` added in the same migration.
+- **Authorization** — `requireRole('admin')` / `requireAdmin` (`src/middleware/authorize.ts`) fetches the
+  caller's **current** role per request (immediate revocation on demotion) and keeps `auth` DB-free; **role
+  is deliberately NOT a JWT claim**. Denials throw `ForbiddenError` (403) and emit an `access.denied` audit
+  event (CC7.2).
+- **Admin API** (`src/routes/admin.ts`, mounted `/admin`): `GET /admin/users` (cursor-paginated),
+  `GET /admin/users/:id`, `PATCH /admin/users/:id/role`, `DELETE /admin/users/:id`. Guardrails: an admin
+  cannot change their own role or delete their own account via the admin API (lockout prevention).
+- **Service + audit** (`src/models/User.ts`): `getRole`, `listUsers`, `setRole`, `adminDeleteUser`; the
+  audit-then-delete-cascade transaction is shared with self-service `deleteAccount` via a `deleteUserTx`
+  helper. New audit actions `admin.user.role.change` / `admin.user.delete` are written **inside**
+  `$transaction`, so an audit failure rolls back the privileged action.
+- **Bootstrap** — `scripts/promote-admin.ts <email> [--role=admin|user]` (operator-run; looks up by the
+  email blind index since email is encrypted). Solves the first-admin chicken-and-egg.
+- Tests: `__tests__/integration/admin/{authorization,list-users,update-role,delete-user}.test.ts` +
+  `__tests__/unit/scripts/promote-admin.test.ts`. Docs: `docs/api.md` → **Admin** + **Roles & permissions**;
+  `docs/operations.md` → promote-admin note.
 
 ### User Profile Management **[SOC 2]** — done 2026-07-12
 

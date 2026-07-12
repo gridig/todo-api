@@ -3,6 +3,10 @@ import { Logger } from 'pino';
 
 // ==================== Database Models ====================
 
+// Authorization role. Fixed domain, enforced at the DB layer by a CHECK
+// constraint (users_role_check) and at the app layer by this union.
+export type UserRole = 'user' | 'admin';
+
 export interface User {
   id: string;
   // At the service boundary `email` is always plaintext (create/findByEmail
@@ -12,6 +16,7 @@ export interface User {
   emailHash: string;
   // Optional user-chosen display name (plaintext at rest).
   name: string | null;
+  role: UserRole;
   password: string;
   createdAt: Date;
   updatedAt: Date;
@@ -20,9 +25,10 @@ export interface User {
 // findByEmail returns only these three; email is decrypted, emailHash omitted.
 export type UserLoginFields = Pick<User, 'id' | 'email' | 'password'>;
 
-// Public profile shape returned by the /user/me endpoints — never carries the
-// password hash or emailHash. email is decrypted before it reaches this type.
-export type UserProfile = Pick<User, 'id' | 'email' | 'name' | 'createdAt' | 'updatedAt'>;
+// Public profile shape returned by the /user/me and /admin/users endpoints —
+// never carries the password hash or emailHash. email is decrypted before it
+// reaches this type.
+export type UserProfile = Pick<User, 'id' | 'email' | 'name' | 'role' | 'createdAt' | 'updatedAt'>;
 
 export interface Todo {
   id: string;
@@ -166,6 +172,18 @@ export interface UserServiceInterface {
   changePassword(userId: string, newPassword: string): Promise<{ revokedCount: number }>;
   // Audit then delete the user; Todo/RefreshToken rows cascade away.
   deleteAccount(userId: string): Promise<void>;
+  // --- RBAC ---
+  // Current role for a user id, or null if the user does not exist. Lean lookup
+  // used by the requireRole authorization middleware on admin routes.
+  getRole(userId: string): Promise<UserRole | null>;
+  // Paginated user listing for the admin surface (email decrypted per row).
+  listUsers(params?: PaginationParams): Promise<PaginatedResult<UserProfile>>;
+  // Change a user's role; audits admin.user.role.change (changedBy = adminId)
+  // inside the transaction. Throws UserNotFoundError if the target is missing.
+  setRole(targetId: string, role: UserRole, adminId: string): Promise<UserProfile>;
+  // Admin-initiated deletion of another user; audits admin.user.delete
+  // (changedBy = adminId) then deletes (Todo/RefreshToken cascade).
+  adminDeleteUser(targetId: string, adminId: string): Promise<void>;
   needsRehash(hashedPassword: string): boolean;
   deleteMany(): Promise<{ count: number }>;
 }
