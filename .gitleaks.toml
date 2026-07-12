@@ -19,6 +19,11 @@ paths = [
   '''__tests__/setup\.ts$''',
   '''__tests__/unit/config/env-production\.test\.ts$''',
   '''__tests__/unit/lib/fieldCrypto\.test\.ts$''',
+  '''__tests__/unit/lib/tokens\.test\.ts$''',
+  # API reference doc — contains illustrative example tokens (`eyJ…`, placeholder
+  # refresh tokens), never real credentials. Path-allowlisted because gitleaks
+  # scans git history: the example strings were committed and can't be un-added.
+  '''docs/api\.md$''',
 ]
 
 # Known placeholder strings that appear across docs and fixtures. These are not
