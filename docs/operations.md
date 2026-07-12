@@ -216,6 +216,39 @@ it invalidates every lookup until all rows are re-hashed. Do it in a maintenance
    and recomputes `email_hash` with the new key (collision-checked). Logins that land mid-run miss until
    their row is rehashed, hence the maintenance window. Rotate this key rarely.
 
+## Promoting an admin (RBAC bootstrap)
+
+Roles are `user` (default) and `admin`; only admins may reach `/admin`. Since you cannot use the admin API
+without already being an admin, the **first** admin is created out-of-band with an operator script, and role
+changes thereafter go through `PATCH /admin/users/:id/role`.
+
+```bash
+pnpm build
+node dist/scripts/promote-admin.js alice@example.com                    # → admin (default)
+node dist/scripts/promote-admin.js bob@example.com --role=user          # demote back to user
+node dist/scripts/promote-admin.js bob@example.com --role=user --force  # demote even the last admin
+```
+
+This is a **privileged operator procedure** — it grants/revokes admin. Its security boundary is the
+`db_admin` credential it needs (whoever holds that can already change roles with raw SQL); restrict that
+credential accordingly and expect this to be run rarely (bootstrap + break-glass). It is auditable: every
+change writes an `admin.user.role.change` row to `audit_entries` with `metadata.via = "promote-admin-script"`,
+so script grants show up in the same access-review query as API grants.
+
+- Requires the app env present — it imports the crypto layer to compute the email **blind index**
+  (`users.email` is encrypted, so the lookup is `WHERE email_hash = blindIndex(email)`, not by raw email).
+  So `ENCRYPTION_KEYRING` / `ENCRYPTION_ACTIVE_KEY_ID` / `ENCRYPTION_BLIND_INDEX_KEY` must match the target
+  environment, or the hash won't match any row.
+- Connects via `DATABASE_MIGRATE_URL` (the `db_admin` role) with a `DATABASE_URL` fallback, like the
+  migrations. It prints the target `host/db` before mutating (catch a mis-pointed env by eye), and exits `1`
+  (with a message) if no user matches the email.
+- **Last-admin guard:** it refuses to demote the only remaining admin (which would lock everyone out of
+  `/admin`); pass `--force` to override. A no-op change (already the requested role) exits `0` without writing.
+- On Railway: `railway run --service todo-api node dist/scripts/promote-admin.js <email>` so the service's
+  env (DB DSN + encryption keys) is injected.
+- Role is checked per request (not carried in the JWT), so a promotion/demotion takes effect immediately —
+  no re-login required to gain access, and a demotion revokes admin access on the next request.
+
 ## JWT secret rotation
 
 `JWT_SECRET` signs and verifies every access token (HS256). Rotating it is a SOC 2 CC6.1 key-management
@@ -294,6 +327,41 @@ Same as Scenario A, but in step 3 also set
 `PGBACKREST_RESTORE_ARGS=--type=time --target="2026-06-01 12:00:00+00"`. Add `--target-exclusive` to
 stop _before_ the bad event; use `--delta` instead of an empty volume to restore in place over existing
 data.
+
+### Re-apply erasures after restore (GDPR Art. 17)
+
+**Any restore that rewinds past an account deletion resurrects that user.** A restore rolls the whole
+cluster back to the backup point, so users deleted *after* that point — and their todos and refresh
+tokens — come back to life. This is an accepted GDPR posture (backups are "beyond use" and expire on the
+normal ≤35-day cycle) **only if erasures are re-applied before the restored data serves traffic again**.
+Skipping this step turns a routine DR restore into an un-erasure — a reportable breach.
+
+> **The restored audit log cannot tell you who to re-delete.** The `user.delete` audit rows for
+> post-backup deletions were themselves written after the backup point, so they are gone in the restored
+> DB too. The list of erasures to replay must come from a source that lives **outside** this backup.
+
+Run this **between step 5 (clear restore env) and step 6 (repoint the app)** of Scenario A/B, while the
+app is still stopped:
+
+1. **Build the replay list** — every erasure request with a completion time **after the restore
+   target**. Source of truth, in order of preference:
+   - the central audit/log stream once log aggregation ships (query `action = 'user.delete'` with
+     `changed_at > <restore target>`) — **not yet available**; until then:
+   - the **erasure register** (the DSAR / support tracker where deletion requests are logged). This
+     register is the interim system of record precisely because it survives a DB rollback — keep it
+     current for every `DELETE /user/me`.
+2. **Re-erase each user id** against the restored DB. `UserService.deleteAccount(userId)` performs the
+   same audit-then-delete-with-cascade and does **not** require the user's password (only the HTTP route
+   does), so an operator script — e.g. `scripts/erase-users.ts <userId…>` — can replay the list and write
+   a fresh `user.delete` audit row per user documenting the re-erasure. (No admin delete endpoint exists
+   yet; the script/direct-service path is the mechanism until RBAC lands.)
+3. **Verify** none of the replayed ids resolve: for each, `SELECT 1 FROM users WHERE id = '<id>'` returns
+   0 rows, and `SELECT count(*) FROM todos WHERE user_id = '<id>'` is 0.
+4. **Record it** in the restore evidence report (which ids were replayed, from which register, against
+   which restore target) — this is the accountability artifact proving erasure was preserved across the
+   restore.
+
+Only then proceed to step 6 and let the app serve traffic.
 
 ### Quarterly restore drill (SOC 2 A1.3)
 

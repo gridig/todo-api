@@ -56,6 +56,14 @@ export const TodoService: TodoServiceInterface = {
     });
   },
 
+  // Unpaginated: the data-export endpoint needs the user's complete todo set.
+  async findAllByUser(userId) {
+    return prisma.todo.findMany({
+      where: { userId },
+      orderBy: { createdAt: 'desc' },
+    });
+  },
+
   async toggleDone({ id, userId }) {
     return prisma.$transaction(async (tx) => {
       const result = await tx.$queryRaw<Todo[]>`

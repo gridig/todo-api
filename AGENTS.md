@@ -26,11 +26,11 @@ A production-ready RESTful API for managing todos with user authentication.
 - `src/config/env.ts` - Environment variable validation with envalid
 - `src/types/` - TypeScript type definitions (index.ts, express.d.ts)
 - `src/errors/` - Custom error classes (index.ts; database.ts maps Prisma/pg errors)
-- `src/lib/` - Prisma client, DB connect-with-retry (`dbConnect.ts`, `retry.ts`), audit logging, request context
-- `src/models/` - Prisma models (User, Todo)
-- `src/routes/` - Express routers (auth, todos, health)
-- `src/middleware/` - Auth, validation, rate limiting (+ `rateLimitStore.ts` Redis/memory fallback), logging, error handling
-- `scripts/preflight-roles.ts` - Pre-deploy DB role/privilege verification (runs before `prisma migrate deploy`)
+- `src/lib/` - Prisma client, DB connect-with-retry (`dbConnect.ts`, `retry.ts`), access/refresh tokens (`tokens.ts`), field encryption (`crypto/` — `fieldCrypto.ts`, `keyProvider.ts`), email normalization (`normalizeEmail.ts`), audit logging, request context
+- `src/models/` - Prisma models (User, Todo, RefreshToken)
+- `src/routes/` - Express routers (auth, todos, user, admin, health)
+- `src/middleware/` - Auth, authorization (`authorize.ts` — `requireRole` admin guard), validation, rate limiting (+ `rateLimitStore.ts` Redis/memory fallback), logging, error handling
+- `scripts/` - Operator/deploy scripts: `preflight-roles.ts` (pre-deploy role/privilege check, runs before `prisma migrate deploy`), `promote-admin.ts` (grant/revoke the `admin` role by email), `backfill-email-crypto.ts` (email-encryption backfill), `predeploy.ts`
 
 ## Build and Test Commands
 
@@ -207,7 +207,7 @@ For the full testing guide (structure, helpers reference, writing tests, databas
    - Use `user.comparePassword()` method for verification
 
 4. **JWT tokens**
-   - 24-hour expiration, HS256 only
+   - Short-lived access tokens (`ACCESS_TOKEN_EXPIRY`, default 15m), HS256 only, paired with opaque **rotating refresh tokens** (`RefreshToken` model; `POST /auth/refresh` rotates, `/auth/logout` + `/auth/logout-all` revoke). Replaying a revoked refresh token is treated as theft and revokes the user's entire token set. Signing/verification live in `src/lib/tokens.ts`
    - Payload carries the standard `sub` claim (subject = user id), plus `iss` and `aud` (set via `JWT_ISSUER` / `JWT_AUDIENCE`)
    - Verification has 5-second `clockTolerance` for cross-instance drift
    - `src/middleware/auth.ts` enforces `issuer`/`audience` on every request and reads only the `sub` claim. The legacy `{ userId }` payload path and the `JWT_VERIFY_REQUIRE_CLAIMS` grace-window flag were removed after the 2026-07 rollout
@@ -373,15 +373,21 @@ When changing API endpoints, update `docs/api.md`. When adding environment varia
 | `src/types/index.ts`             | Core TypeScript type definitions                  |
 | `src/types/express.d.ts`         | Express Request/Response augmentation             |
 | `src/errors/index.ts`            | Custom error classes (AppError, AuthError, etc.)  |
-| `src/middleware/auth.ts`         | JWT authentication                                |
+| `src/middleware/auth.ts`         | JWT authentication (DB-free; sets `req.userId`)   |
+| `src/middleware/authorize.ts`    | `requireRole`/`requireAdmin` role guard (per-request role lookup; audits `access.denied`) |
 | `src/middleware/errorHandler.ts` | Centralized error handling with structured format |
 | `src/middleware/validation.ts`   | Joi schemas and validation middleware             |
 | `src/middleware/rateLimiter.ts`  | Rate limiting configuration                       |
 | `src/middleware/logger.ts`       | Pino logger setup                                 |
-| `src/models/User.ts`             | User model with password hashing                  |
+| `src/models/User.ts`             | User model (password hashing, email field-encryption, profile/role mutations) |
 | `src/models/Todo.ts`             | Todo model                                        |
-| `src/routes/auth.ts`             | Register and login endpoints                      |
+| `src/models/RefreshToken.ts`     | Refresh-token issue/verify/rotate/revoke + theft detection |
+| `src/routes/auth.ts`             | Register, login, refresh, logout, logout-all      |
+| `src/routes/user.ts`             | Self-service profile: `/user/me`, email/password change, delete, export |
+| `src/routes/admin.ts`            | Admin user management (`/admin/users`, role change, delete) — behind `requireAdmin` |
 | `src/routes/health.ts`           | Health check endpoints (liveness/readiness)       |
 | `src/routes/todos.ts`            | CRUD operations for todos                         |
+| `src/lib/tokens.ts`              | Access-token sign/verify + refresh-token generation/hashing |
+| `src/lib/crypto/`                | AES-256-GCM field encryption + keyed blind index (email at rest) |
 | `tsconfig.json`                  | TypeScript compiler configuration                 |
 | `tsconfig.test.json`             | TypeScript config for tests                       |

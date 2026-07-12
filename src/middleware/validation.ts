@@ -75,18 +75,24 @@ const emailSchema = Joi.string()
   .custom((value: string) => normalizeEmail(value))
   .max(72);
 
+// Password complexity rule, shared by registration and password change so the
+// two never drift apart. `.required()` is applied per-use.
+const passwordSchema = Joi.string()
+  .min(8)
+  .max(72)
+  .pattern(/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]+$/)
+  .messages({
+    'string.pattern.base':
+      'Password must contain uppercase, lowercase, number and special character',
+  });
+
+// Display name: trimmed, 1-100 chars (matches the users.name VARCHAR(100)).
+const nameSchema = Joi.string().trim().min(1).max(100);
+
 export const schemas = {
   register: Joi.object({
     email: emailSchema.required(),
-    password: Joi.string()
-      .min(8)
-      .max(72)
-      .pattern(/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]+$/)
-      .required()
-      .messages({
-        'string.pattern.base':
-          'Password must contain uppercase, lowercase, number and special character',
-      }),
+    password: passwordSchema.required(),
   }),
 
   login: Joi.object({
@@ -104,6 +110,36 @@ export const schemas = {
 
   logout: Joi.object({
     refreshToken: Joi.string().max(512).required(),
+  }),
+
+  // Profile update: display name only. Email lives on its own endpoint
+  // (PATCH /user/me/email) so its re-auth check is unconditional — a security
+  // check gated by request data trips static analysis (user-controlled bypass)
+  // and reads as a bypass even though it isn't.
+  updateProfile: Joi.object({
+    name: nameSchema.required(),
+  }),
+
+  // Email change requires the current password (re-auth against account takeover
+  // via a stolen access token). Both fields are always required, so the handler
+  // verifies unconditionally.
+  changeEmail: Joi.object({
+    email: emailSchema.required(),
+    currentPassword: Joi.string().required(),
+  }),
+
+  changePassword: Joi.object({
+    currentPassword: Joi.string().required(),
+    newPassword: passwordSchema.required(),
+  }),
+
+  deleteAccount: Joi.object({
+    currentPassword: Joi.string().required(),
+  }),
+
+  // Admin role change. Domain mirrors the users_role_check DB constraint.
+  updateRole: Joi.object({
+    role: Joi.string().valid('user', 'admin').required(),
   }),
 
   todo: Joi.object({

@@ -85,6 +85,15 @@ export async function createTestUser(email: string | null = null): Promise<TestU
   return { user, authToken, userId: user.id };
 }
 
+// Like createTestUser, but promotes the user to admin after creation. The JWT is
+// still sub-only (role is never in the token) — authorization is enforced by a
+// per-request DB role lookup, so setting the column is what makes an admin.
+export async function createTestAdmin(email: string | null = null): Promise<TestUserResult> {
+  const result = await createTestUser(email);
+  await prisma.user.update({ where: { id: result.userId }, data: { role: 'admin' } });
+  return result;
+}
+
 export async function connectTestDB(): Promise<void> {
   await prisma.$connect();
 }

@@ -161,6 +161,12 @@ export class TodoNotFoundError extends NotFoundError {
   }
 }
 
+export class UserNotFoundError extends NotFoundError {
+  constructor() {
+    super('User', 'USER_NOT_FOUND');
+  }
+}
+
 export class RouteNotFoundError extends NotFoundError {
   constructor(path: string) {
     super('Route', 'ROUTE_NOT_FOUND');

@@ -325,6 +325,268 @@ Todos are ordered by `createdAt` descending (newest first). When `hasMore` is `t
 
 ---
 
+## User
+
+Self-service account management. All `/user` endpoints require authentication via JWT in the
+`Authorization` header.
+
+### Get Current Profile
+
+**GET** `/user/me`
+
+**Rate Limit**: 100 requests per minute
+
+**Response** (200 OK):
+
+```json
+{
+  "id": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
+  "name": "Ada Lovelace",
+  "email": "ada@example.com",
+  "createdAt": "2024-01-15T10:30:00.000Z",
+  "updatedAt": "2024-01-15T10:30:00.000Z"
+}
+```
+
+`name` is `null` until set. The password hash and email blind index are never returned.
+
+---
+
+### Update Profile
+
+**PATCH** `/user/me`
+
+**Rate Limit**: 30 requests per minute
+
+Update the display name. (Email is changed via its own endpoint — see **Change Email** — because it requires
+re-authentication.)
+
+**Request Body**:
+
+```json
+{
+  "name": "Ada Lovelace"
+}
+```
+
+**Response** (200 OK): the updated profile (same shape as `GET /user/me`).
+
+**Validation Rules**:
+
+- `name`: 1-100 characters, trimmed (required)
+
+**Errors**: `400 VALIDATION_ERROR` (missing/invalid name).
+
+---
+
+### Change Email
+
+**PATCH** `/user/me/email`
+
+**Rate Limit**: 30 requests per minute
+
+Changes the account email. **Requires the current password** (re-authentication against a stolen access
+token). The email is re-encrypted at rest and its blind index rotated.
+
+**Request Body**:
+
+```json
+{
+  "email": "ada.new@example.com",
+  "currentPassword": "CurrentPass123!"
+}
+```
+
+**Response** (200 OK): the updated profile.
+
+**Validation Rules**:
+
+- `email`: valid email, max 72 characters (required)
+- `currentPassword`: required
+
+**Errors**: `400 VALIDATION_ERROR` (missing email/password), `401 INVALID_CREDENTIALS` (wrong current
+password), `409 DUPLICATE_EMAIL` (email already in use).
+
+---
+
+### Change Password
+
+**PATCH** `/user/me/password`
+
+**Rate Limit**: 30 requests per minute
+
+Verifies the current password, sets the new one, and **revokes every refresh token** for the user
+(all devices must log in again). The current access token remains valid until it expires.
+
+**Request Body**:
+
+```json
+{
+  "currentPassword": "CurrentPass123!",
+  "newPassword": "NewPass456!"
+}
+```
+
+**Response** (200 OK):
+
+```json
+{
+  "message": "Password changed. Please log in again."
+}
+```
+
+**Validation Rules**:
+
+- `newPassword`: 8-72 characters, must contain uppercase, lowercase, number, and special character
+
+**Errors**: `400 VALIDATION_ERROR` (weak new password), `401 INVALID_CREDENTIALS` (wrong current password).
+
+---
+
+### Delete Account
+
+**DELETE** `/user/me`
+
+**Rate Limit**: 30 requests per minute
+
+Verifies the current password, then permanently deletes the account. Todos and refresh tokens are
+cascade-deleted; the deletion is recorded in the audit log (which is retained).
+
+**Request Body**:
+
+```json
+{
+  "currentPassword": "CurrentPass123!"
+}
+```
+
+**Response** (204 No Content): Empty body
+
+**Errors**: `401 INVALID_CREDENTIALS` (wrong current password).
+
+---
+
+### Export Data
+
+**GET** `/user/me/export`
+
+**Rate Limit**: 100 requests per minute
+
+Returns the full profile plus every todo as a downloadable JSON attachment (data portability). The
+access is recorded in the audit log.
+
+**Response** (200 OK, `Content-Disposition: attachment; filename="todo-api-export-<userId>.json"`):
+
+```json
+{
+  "user": {
+    "id": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
+    "name": "Ada Lovelace",
+    "email": "ada@example.com",
+    "createdAt": "2024-01-15T10:30:00.000Z",
+    "updatedAt": "2024-01-15T10:30:00.000Z"
+  },
+  "todos": [
+    {
+      "id": "550e8400-e29b-41d4-a716-446655440000",
+      "text": "Buy groceries",
+      "done": false,
+      "userId": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
+      "createdAt": "2024-01-15T10:30:00.000Z",
+      "updatedAt": "2024-01-15T10:30:00.000Z"
+    }
+  ]
+}
+```
+
+---
+
+## Admin
+
+Administrative user management. All `/admin` endpoints require authentication **and** the `admin` role.
+Requests from a non-admin return `403 FORBIDDEN` and are recorded in the audit log.
+
+### Roles & permissions
+
+| Role | Capabilities |
+| ------- | ---------------------------------------------------------------------------------------- |
+| `user` | Default. Full access to their own todos and profile (`/todos`, `/user/me`). No `/admin`. |
+| `admin` | Everything a `user` can do for their own account, **plus** the `/admin` surface below. |
+
+Role is stored on the user (`users.role`, default `user`) and checked by a per-request lookup — it is
+**not** carried in the JWT, so a role change takes effect immediately. The first admin is created out-of-band
+with `scripts/promote-admin.ts` (see [operations.md](operations.md)); thereafter admins manage roles via
+`PATCH /admin/users/:id/role`. An admin cannot change their own role or delete their own account through the
+admin API (use `/user/me` for self-service).
+
+### List Users
+
+**GET** `/admin/users`
+
+**Auth**: `Authorization: Bearer <token>` (admin) · **Rate Limit**: 100 requests per minute
+
+**Query Parameters**: same as `GET /todos` — `limit` (1-100, default 20) and `cursor` (UUID).
+
+**Response** (200 OK):
+
+```json
+{
+  "data": [
+    {
+      "id": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
+      "name": "Ada Lovelace",
+      "email": "ada@example.com",
+      "role": "user",
+      "createdAt": "2024-01-15T10:30:00.000Z",
+      "updatedAt": "2024-01-15T10:30:00.000Z"
+    }
+  ],
+  "meta": { "nextCursor": "…", "hasMore": true }
+}
+```
+
+---
+
+### Get User
+
+**GET** `/admin/users/:id`
+
+**Auth**: admin · **Rate Limit**: 100 requests per minute
+
+**Response** (200 OK): a single user (same shape as a list row). `404 USER_NOT_FOUND` if the id does not exist.
+
+---
+
+### Change User Role
+
+**PATCH** `/admin/users/:id/role`
+
+**Auth**: admin · **Rate Limit**: 30 requests per minute
+
+**Request Body**:
+
+```json
+{ "role": "admin" }
+```
+
+**Response** (200 OK): the updated user. **Errors**: `400 VALIDATION_ERROR` (role not `user`/`admin`),
+`403 FORBIDDEN` (changing your own role), `404 USER_NOT_FOUND`.
+
+---
+
+### Delete User
+
+**DELETE** `/admin/users/:id`
+
+**Auth**: admin · **Rate Limit**: 30 requests per minute
+
+Permanently deletes the target user; their todos and refresh tokens cascade-delete and the action is audited
+(`admin.user.delete`).
+
+**Response** (204 No Content). **Errors**: `403 FORBIDDEN` (deleting your own account), `404 USER_NOT_FOUND`.
+
+---
+
 ## Health Check
 
 Health check endpoints for monitoring and container orchestration. These endpoints are **not rate limited** to ensure load balancers can always reach them.
@@ -649,6 +911,8 @@ All error responses follow a structured format with error codes for client-side 
 | `NO_TOKEN`               | 401         | No authentication token provided                                  |
 | `INVALID_TOKEN`          | 401         | Token is invalid or expired                                       |
 | `TODO_NOT_FOUND`         | 404         | Todo does not exist or belongs to another user                    |
+| `USER_NOT_FOUND`         | 404         | Authenticated user's account no longer exists                     |
+| `FORBIDDEN`              | 403         | Authenticated but not authorized (e.g. admin role required)       |
 | `ROUTE_NOT_FOUND`        | 404         | API endpoint does not exist                                       |
 | `DUPLICATE_EMAIL`        | 409         | Email already registered                                          |
 | `DUPLICATE_VALUE`        | 409         | Unique constraint violation                                       |
