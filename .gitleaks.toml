@@ -1,0 +1,28 @@
+# Gitleaks configuration for the CI secret-scan job (.github/workflows/ci.yml).
+# Extends the built-in ruleset and allowlists the committed dev/test fixtures
+# that are deliberately non-secret, so the scan fails only on real credentials.
+title = "todo-api gitleaks config"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Committed non-secret placeholders and local dev fixtures"
+
+# Files that intentionally carry placeholder credentials for local dev / tests.
+paths = [
+  '''\.env\.example$''',
+  '''\.env\.test$''',
+  '''prisma/sql/bootstrap_roles.*\.sql$''',
+  '''docker-compose\.ya?ml$''',
+]
+
+# Known placeholder strings that appear across docs and fixtures. These are not
+# real secrets (local docker dev passwords, the readable JWT placeholder, and
+# the committed all-zero base64 encryption key that production refuses to boot on).
+regexes = [
+  '''db_(app|admin|auditor)_dev''',
+  '''your-super-secret-jwt-key[a-z0-9-]*''',
+  '''AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=''',
+  '''TestPass123!''',
+]

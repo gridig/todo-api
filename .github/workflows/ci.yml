@@ -127,6 +127,25 @@ jobs:
       # tree is clean at that level).
       - run: pnpm audit --prod --audit-level=high
 
+  secret-scan:
+    name: Secret scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          # Full history so a secret introduced in any commit on the PR (or on a
+          # push to main) is caught, not just the tip. gitleaks scans the commit
+          # range on PRs and the whole history on push.
+          fetch-depth: 0
+      # SOC 2 CC6.1 change-management control: fail the build if a credential
+      # (JWT_SECRET, DATABASE_URL, tokens, keys) is ever committed. The workflow
+      # run itself is the audit artifact. Rules live in .gitleaks.toml if present;
+      # otherwise gitleaks' built-in ruleset applies.
+      - name: Gitleaks secret scan
+        uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2.3.9
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
   docker-images:
     name: Docker images
     runs-on: ubuntu-latest

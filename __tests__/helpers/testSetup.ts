@@ -7,6 +7,7 @@ import jwt from 'jsonwebtoken';
 import crypto from 'crypto';
 import UserService from '@/models/User.js';
 import TodoService from '@/models/Todo.js';
+import RefreshTokenService from '@/models/RefreshToken.js';
 import { env } from '@/config/env.js';
 
 // Privileged pool wired to the admin DSN so tests can TRUNCATE audit_entries
@@ -96,7 +97,11 @@ export async function disconnectTestDB(): Promise<void> {
 }
 
 export async function cleanupTestData(): Promise<void> {
-  // Delete in correct order due to foreign key constraints
+  // Delete in correct order due to foreign key constraints. Refresh tokens and
+  // todos both FK-reference users, so they must go before UserService. (User
+  // deletion cascades to both at the DB layer, but clearing them explicitly
+  // keeps the intent obvious and lets suites reset tokens without users.)
+  await RefreshTokenService.deleteMany();
   await TodoService.deleteMany();
   await UserService.deleteMany();
 }

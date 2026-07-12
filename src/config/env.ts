@@ -121,6 +121,16 @@ export const env = cleanEnv(process.env, {
     example: 'your-super-secret-jwt-key-min-32-chars',
   }),
 
+  // Optional previous signing secret, honoured on the VERIFY side only. During
+  // a JWT_SECRET rotation, set this to the outgoing secret so tokens signed
+  // before the cutover keep verifying until they expire (dual-secret window).
+  // New tokens are always signed with JWT_SECRET. Clear it once the window
+  // (>= ACCESS_TOKEN_EXPIRY) has elapsed. See docs/operations.md → JWT secret rotation.
+  JWT_SECRET_PREVIOUS: jwtSecret({
+    default: undefined,
+    desc: 'Previous JWT secret, accepted on verify only during a rotation window. Minimum 32 characters when set. Unset outside rotations.',
+  }),
+
   JWT_ISSUER: str({
     default: 'todo-api',
     desc: 'JWT `iss` claim. Set both sign and verify sides to the same value.',
@@ -129,6 +139,20 @@ export const env = cleanEnv(process.env, {
   JWT_AUDIENCE: str({
     default: 'todo-api-clients',
     desc: 'JWT `aud` claim. Set both sign and verify sides to the same value.',
+  }),
+
+  // Access tokens are short-lived: revocation of a compromised session is
+  // achieved by revoking the refresh token (logout-all / password change) and
+  // letting the access token expire within this window — stateless JWTs can't
+  // be individually revoked. Value is any `ms`-style string jsonwebtoken accepts.
+  ACCESS_TOKEN_EXPIRY: str({
+    default: '15m',
+    desc: 'Access-token lifetime (jsonwebtoken `expiresIn`, e.g. "15m", "1h"). Keep short — refresh tokens cover long-lived sessions.',
+  }),
+
+  REFRESH_TOKEN_EXPIRY_DAYS: num({
+    default: 30,
+    desc: 'Refresh-token lifetime in days. Rotated on every /auth/refresh; the absolute expiry here caps a stolen-but-unused token.',
   }),
 
   // Field-level encryption (see docs/configuration.md → "Encryption at rest").

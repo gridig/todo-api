@@ -205,6 +205,18 @@ const limiterDefaults: Record<string, Partial<Options>> = {
       error: 'Too many accounts created. Please try again later.',
     },
   },
+
+  // Refresh + logout are refresh-token operations, keyed by IP (no email in the
+  // body). Refresh tokens are 256-bit random, so blind guessing is futile; this
+  // cap exists to bound abuse, not to gate legitimate multi-device users who
+  // refresh every access-token window (~4/hour/device).
+  refresh: {
+    windowMs: 15 * 60 * 1000,
+    max: 60,
+    message: {
+      error: 'Too many token refresh attempts. Please try again later.',
+    },
+  },
 };
 
 export const buildLimiter = (
@@ -220,3 +232,4 @@ export const readLimiter = buildLimiter('read');
 export const globalLimiter = buildLimiter('global');
 export const healthLimiter = buildLimiter('health');
 export const registerLimiter = buildLimiter('register');
+export const refreshLimiter = buildLimiter('refresh');
