@@ -16,7 +16,7 @@ A production-ready RESTful API for managing todos with user authentication.
 - Helmet secure HTTP headers (8.x)
 - Joi validation (18.x)
 - Pino structured logging (10.x)
-- Express-rate-limit (8.5.2), optional Redis store (redis 6.x, rate-limit-redis 5.x)
+- Express-rate-limit (8.6.1), optional Redis store (redis 6.x, rate-limit-redis 5.x)
 - Testing: Jest 30.4.2, ts-jest, Supertest
 
 **Architecture:**
@@ -111,8 +111,9 @@ pnpm run start:prod    # Run in production mode
   - `AuthError`, `InvalidCredentialsError`, `NoTokenError`, `InvalidTokenError` - Authentication errors (401)
   - `ValidationError`, `InvalidIdFormatError` - Validation errors (400)
   - `ForbiddenError` - Authorization errors (403)
-  - `NotFoundError`, `TodoNotFoundError`, `RouteNotFoundError` - Not found errors (404)
+  - `NotFoundError`, `TodoNotFoundError`, `UserNotFoundError`, `RouteNotFoundError` - Not found errors (404)
   - `ConflictError`, `DuplicateEmailError`, `DuplicateValueError` - Conflict errors (409)
+  - `RateLimitError` - Rate limit errors (429)
   - `InternalServerError` - Server errors (500)
   - `ServiceUnavailableError`, `DatabaseUnavailableError` - Transient errors (503, sets Retry-After)
 - Return early for error conditions
@@ -220,7 +221,9 @@ For the full testing guide (structure, helpers reference, writing tests, databas
    - Login per (IP, email): 3 failed attempts per 15 minutes
    - Login per email: 30 attempts per hour (caps single-account brute-force regardless of source IP)
    - Read operations: 100 per minute (per IP)
-   - Write operations: 30 per minute (per IP)
+   - Write operations: 30 per minute (per IP; includes `/auth/logout-all`)
+   - Refresh-token operations (`/auth/refresh`, `/auth/logout`): 60 per 15 minutes (per IP)
+   - Health readiness (`/health/ready`, `/health/ready/detailed`): 60 per minute (per IP; liveness `/health` is unlimited)
    - With `REDIS_URL` set, limiters are Redis-backed (cross-instance); if Redis is unavailable they degrade to a per-instance memory store (`src/middleware/rateLimitStore.ts`) rather than failing requests — watch `rate_limit_store_fallback_total`
    - Rate limiting is skipped in the `test` environment and when `DISABLE_RATE_LIMIT=true`. In production (`NODE_ENV=production`) the latter requires the paired `DISABLE_RATE_LIMIT_PRODUCTION_CONFIRM=true` flag — startup aborts otherwise. Use only on a dedicated benchmark process.
 
@@ -304,10 +307,10 @@ docs: update API documentation for rate limits
 
 GitHub Actions deploys to Railway. Workflow: [`.github/workflows/deploy.yml`](.github/workflows/deploy.yml).
 
-- **Staging**: automatic on push to `main`.
-- **Production**: manual `workflow_dispatch` from the Actions tab; gated by the `production` GitHub Environment's required-reviewer rule.
+- **Staging**: automatic via `workflow_run` after the CI workflow succeeds on `main` — only CI-green commits deploy (not directly on push).
+- **Production**: manual `workflow_dispatch` from the Actions tab; the environment input defaults to `staging`, so production must be explicitly selected. Gated by the `production` GitHub Environment's required-reviewer rule.
 
-The deploy step runs `railway up --ci --service todo-api`. The Railway project has three services (`todo-api`, `Postgres`, `Redis`); `--service todo-api` pins deploys to the app only.
+The deploy step runs `railway up --ci --service todo-api`. The Railway project has three services (`todo-api`, `timescaledb`, `Redis`); `--service todo-api` pins deploys to the app only.
 
 `RAILWAY_TOKEN` is a Railway Project Token scoped per environment, stored as an environment-scoped secret in GitHub Environments (one token for `staging`, one for `production`). Never put Railway tokens in repo-level secrets or commit them. Railway's native auto-deploy is disabled — the Actions workflow is the only path to either environment, so the required-reviewer gate cannot be bypassed.
 
@@ -326,12 +329,10 @@ Do not manually merge Dependabot PRs that the auto-merge workflow would handle �
 
 ## Roadmap Workflow
 
-The benchmark comparison infrastructure is complete. The current focus is cross-language performance comparison, not feature development.
-
 ### Current State
 
-- **`ROADMAP.md`** tracks completed work and optional performance optimizations only
-- The TypeScript implementation satisfies the [Fair Comparison Requirements](plans/alternatives/FAIR-COMPARISON-REQUIREMENTS.md) spec
+- **`ROADMAP.md`** is the phased platform/production-readiness plan (SOC 2 priorities, open vs. done)
+- The benchmark comparison infrastructure is complete (see `docs/benchmarks.md`)
 - Do not implement features that are not in the roadmap unless explicitly requested by the user
 
 ### After Implementation
@@ -365,29 +366,29 @@ When changing API endpoints, update `docs/api.md`. When adding environment varia
 
 ## Key Files Quick Reference
 
-| File                             | Purpose                                           |
-| -------------------------------- | ------------------------------------------------- |
-| `src/index.ts`                   | Server startup, DB connection, graceful shutdown  |
-| `src/app.ts`                     | Express app factory, middleware pipeline          |
-| `src/config/env.ts`              | Environment variable validation                   |
-| `src/types/index.ts`             | Core TypeScript type definitions                  |
-| `src/types/express.d.ts`         | Express Request/Response augmentation             |
-| `src/errors/index.ts`            | Custom error classes (AppError, AuthError, etc.)  |
-| `src/middleware/auth.ts`         | JWT authentication (DB-free; sets `req.userId`)   |
+| File                             | Purpose                                                                                   |
+| -------------------------------- | ----------------------------------------------------------------------------------------- |
+| `src/index.ts`                   | Server startup, DB connection, graceful shutdown                                          |
+| `src/app.ts`                     | Express app factory, middleware pipeline                                                  |
+| `src/config/env.ts`              | Environment variable validation                                                           |
+| `src/types/index.ts`             | Core TypeScript type definitions                                                          |
+| `src/types/express.d.ts`         | Express Request/Response augmentation                                                     |
+| `src/errors/index.ts`            | Custom error classes (AppError, AuthError, etc.)                                          |
+| `src/middleware/auth.ts`         | JWT authentication (DB-free; sets `req.userId`)                                           |
 | `src/middleware/authorize.ts`    | `requireRole`/`requireAdmin` role guard (per-request role lookup; audits `access.denied`) |
-| `src/middleware/errorHandler.ts` | Centralized error handling with structured format |
-| `src/middleware/validation.ts`   | Joi schemas and validation middleware             |
-| `src/middleware/rateLimiter.ts`  | Rate limiting configuration                       |
-| `src/middleware/logger.ts`       | Pino logger setup                                 |
-| `src/models/User.ts`             | User model (password hashing, email field-encryption, profile/role mutations) |
-| `src/models/Todo.ts`             | Todo model                                        |
-| `src/models/RefreshToken.ts`     | Refresh-token issue/verify/rotate/revoke + theft detection |
-| `src/routes/auth.ts`             | Register, login, refresh, logout, logout-all      |
-| `src/routes/user.ts`             | Self-service profile: `/user/me`, email/password change, delete, export |
-| `src/routes/admin.ts`            | Admin user management (`/admin/users`, role change, delete) — behind `requireAdmin` |
-| `src/routes/health.ts`           | Health check endpoints (liveness/readiness)       |
-| `src/routes/todos.ts`            | CRUD operations for todos                         |
-| `src/lib/tokens.ts`              | Access-token sign/verify + refresh-token generation/hashing |
-| `src/lib/crypto/`                | AES-256-GCM field encryption + keyed blind index (email at rest) |
-| `tsconfig.json`                  | TypeScript compiler configuration                 |
-| `tsconfig.test.json`             | TypeScript config for tests                       |
+| `src/middleware/errorHandler.ts` | Centralized error handling with structured format                                         |
+| `src/middleware/validation.ts`   | Joi schemas and validation middleware                                                     |
+| `src/middleware/rateLimiter.ts`  | Rate limiting configuration                                                               |
+| `src/middleware/logger.ts`       | Pino logger setup                                                                         |
+| `src/models/User.ts`             | User model (password hashing, email field-encryption, profile/role mutations)             |
+| `src/models/Todo.ts`             | Todo model                                                                                |
+| `src/models/RefreshToken.ts`     | Refresh-token issue/verify/rotate/revoke + theft detection                                |
+| `src/routes/auth.ts`             | Register, login, refresh, logout, logout-all                                              |
+| `src/routes/user.ts`             | Self-service profile: `/user/me`, email/password change, delete, export                   |
+| `src/routes/admin.ts`            | Admin user management (`/admin/users`, role change, delete) — behind `requireAdmin`       |
+| `src/routes/health.ts`           | Health check endpoints (liveness/readiness)                                               |
+| `src/routes/todos.ts`            | CRUD operations for todos                                                                 |
+| `src/lib/tokens.ts`              | Access-token sign/verify + refresh-token generation/hashing                               |
+| `src/lib/crypto/`                | AES-256-GCM field encryption + keyed blind index (email at rest)                          |
+| `tsconfig.json`                  | TypeScript compiler configuration                                                         |
+| `tsconfig.test.json`             | TypeScript config for tests                                                               |

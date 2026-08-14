@@ -45,13 +45,20 @@ describe('PATCH /admin/users/:id/role', () => {
     expect(res.status).toBe(200);
     expect(res.body.role).toBe('admin');
 
-    const stored = await prisma.user.findUnique({ where: { id: target.userId }, select: { role: true } });
+    const stored = await prisma.user.findUnique({
+      where: { id: target.userId },
+      select: { role: true },
+    });
     expect(stored?.role).toBe('admin');
 
-    const row = await pollForAuditRow<{ previous_value: { role: string }; new_value: { role: string } }>(
-      'action = $1 AND entity_id = $2 AND changed_by = $3',
-      ['admin.user.role.change', target.userId, adminId],
-    );
+    const row = await pollForAuditRow<{
+      previous_value: { role: string };
+      new_value: { role: string };
+    }>('action = $1 AND entity_id = $2 AND changed_by = $3', [
+      'admin.user.role.change',
+      target.userId,
+      adminId,
+    ]);
     expect(row).not.toBeNull();
     expect(row?.previous_value.role).toBe('user');
     expect(row?.new_value.role).toBe('admin');

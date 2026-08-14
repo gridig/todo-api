@@ -51,9 +51,7 @@ function runStep(label: string, cmd: string, args: string[], log: PredeployLogge
   return 0;
 }
 
-export async function runPredeploy(
-  log: PredeployLogger = console,
-): Promise<number> {
+export async function runPredeploy(log: PredeployLogger = console): Promise<number> {
   // 1. Roles the migrations + audit-log REVOKE depend on.
   const rolesCode = await runPreflight();
   if (rolesCode !== 0) return rolesCode;

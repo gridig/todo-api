@@ -15,7 +15,12 @@ const PASSWORD = 'TestPass123!';
 
 // Register via the endpoint so we get a real access + refresh token pair — the
 // refresh token lets us assert the change revokes existing sessions.
-async function registerUser(): Promise<{ token: string; refreshToken: string; userId: string; email: string }> {
+async function registerUser(): Promise<{
+  token: string;
+  refreshToken: string;
+  userId: string;
+  email: string;
+}> {
   const email = `pwchange-${Date.now()}-${Math.round(Math.random() * 1e6)}@example.com`;
   const res = await request(app).post('/auth/register').send({ email, password: PASSWORD });
   expect(res.status).toBe(201);

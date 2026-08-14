@@ -28,6 +28,7 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm run lint
+      - run: pnpm run format:check
 
   typecheck:
     name: Typecheck
@@ -161,3 +162,8 @@ jobs:
       # scripts copy). Config is validated at stanza-create runtime, not build time.
       - name: Build TimescaleDB + pgBackRest image
         run: docker build -f docker/timescaledb/Dockerfile docker/timescaledb/
+      # Validates the app image builds (prod-only dep resolution, prisma
+      # generate, tsc, the engines chown glob) BEFORE Railway first exercises
+      # it post-merge — a broken Dockerfile fails CI, not the deploy.
+      - name: Build app image
+        run: docker build .

@@ -91,14 +91,15 @@ describe('assertProductionEnv', () => {
     );
   });
 
-  it('errors when the confirmation flag is set without ENABLE_ECHO_ROUTES (no-op left bare)', () => {
+  it('does NOT flag a bare confirmation flag without ENABLE_ECHO_ROUTES (harmless no-op)', () => {
     // The confirm flag alone is harmless but indicates operator confusion —
-    // assertProductionEnv currently does not flag it. Documenting the intent:
+    // assertProductionEnv deliberately does not flag it. Documenting the intent:
     // the *combination* is what matters, not the confirm flag in isolation.
     const result = assertProductionEnv(
       baseProdCfg({ ENABLE_ECHO_ROUTES_PRODUCTION_CONFIRM: true }),
     );
     expect(result.errors).toEqual([]);
+    expect(result.warnings).toEqual([]);
   });
 
   it('flags an empty ENCRYPTION_KEYRING in production', () => {

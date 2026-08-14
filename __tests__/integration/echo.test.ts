@@ -24,7 +24,6 @@ describe('Echo Endpoint', () => {
 
       expect(response.headers['x-request-id']).toBe(customId);
     });
-
   });
 
   describe('POST /echo', () => {

@@ -28,7 +28,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install Railway CLI
-        run: npm install -g @railway/cli
+        # Pinned: this CLI runs with RAILWAY_TOKEN in env — an unreviewed
+        # latest-version fetch on every deploy is a supply-chain hole.
+        run: npm install -g @railway/cli@5.41.1
 
       # --path-as-root is load-bearing: railway up archives the linked project
       # directory regardless of cwd, so without it the app's root Dockerfile

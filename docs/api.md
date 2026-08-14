@@ -44,7 +44,7 @@ Base URL: `http://localhost:3001`
 
 **POST** `/auth/login`
 
-**Rate Limit**: 3 failed attempts per 15 minutes
+**Rate Limit**: 3 failed attempts per 15 minutes (per IP + email), plus 30 attempts per hour per email regardless of source IP
 
 **Request Body**:
 
@@ -343,6 +343,7 @@ Self-service account management. All `/user` endpoints require authentication vi
   "id": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
   "name": "Ada Lovelace",
   "email": "ada@example.com",
+  "role": "user",
   "createdAt": "2024-01-15T10:30:00.000Z",
   "updatedAt": "2024-01-15T10:30:00.000Z"
 }
@@ -483,6 +484,7 @@ access is recorded in the audit log.
     "id": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
     "name": "Ada Lovelace",
     "email": "ada@example.com",
+    "role": "user",
     "createdAt": "2024-01-15T10:30:00.000Z",
     "updatedAt": "2024-01-15T10:30:00.000Z"
   },
@@ -508,10 +510,10 @@ Requests from a non-admin return `403 FORBIDDEN` and are recorded in the audit l
 
 ### Roles & permissions
 
-| Role | Capabilities |
+| Role    | Capabilities                                                                             |
 | ------- | ---------------------------------------------------------------------------------------- |
-| `user` | Default. Full access to their own todos and profile (`/todos`, `/user/me`). No `/admin`. |
-| `admin` | Everything a `user` can do for their own account, **plus** the `/admin` surface below. |
+| `user`  | Default. Full access to their own todos and profile (`/todos`, `/user/me`). No `/admin`. |
+| `admin` | Everything a `user` can do for their own account, **plus** the `/admin` surface below.   |
 
 Role is stored on the user (`users.role`, default `user`) and checked by a per-request lookup — it is
 **not** carried in the JWT, so a role change takes effect immediately. The first admin is created out-of-band
@@ -589,7 +591,7 @@ Permanently deletes the target user; their todos and refresh tokens cascade-dele
 
 ## Health Check
 
-Health check endpoints for monitoring and container orchestration. These endpoints are **not rate limited** to ensure load balancers can always reach them.
+Health check endpoints for monitoring and container orchestration. The liveness probe (`GET /health`) is **not rate limited**, so load balancers can always reach it. The readiness probes (`/health/ready` and `/health/ready/detailed`) are rate-limited at **60 requests/minute/IP** (`healthLimiter`) — generous for typical orchestrator probe intervals, but blocks abuse of the DB round-trip.
 
 ### Liveness Probe
 
@@ -766,7 +768,7 @@ Prometheus-compatible metrics endpoint for monitoring and observability. This en
 
 **GET** `/metrics`
 
-**Authentication**: Optional. When `METRICS_TOKEN` is set, requests must include `Authorization: Bearer <token>` or `?token=<token>`. When unset, the endpoint is unauthenticated.
+**Authentication**: When `METRICS_TOKEN` is set, requests must include `Authorization: Bearer <token>` — header only; a query-string token is **not** accepted (it would leak into access/proxy logs). When unset, the endpoint is unauthenticated — non-production only: in production `METRICS_TOKEN` is **required** (32+ chars) and startup aborts without it.
 
 **Description**: Returns all application and process metrics in Prometheus text exposition format. Intended for scraping by Prometheus, Grafana Agent, or similar monitoring tools.
 
@@ -776,13 +778,19 @@ Content-Type: `text/plain; version=0.0.4; charset=utf-8`
 
 **Custom Application Metrics**:
 
-| Metric                          | Type      | Labels                           | Description                             |
-| ------------------------------- | --------- | -------------------------------- | --------------------------------------- |
-| `http_request_duration_seconds` | Histogram | `method`, `route`, `status_code` | Duration of HTTP requests in seconds    |
-| `http_requests_total`           | Counter   | `method`, `route`, `status_code` | Total number of HTTP requests           |
-| `rate_limit_hits_total`         | Counter   | `limiter_type`                   | Total number of rate limit hits         |
-| `db_query_duration_seconds`     | Histogram | `operation`, `model`             | Duration of database queries in seconds |
-| `active_connections`            | Gauge     | --                               | Number of active HTTP connections       |
+| Metric                            | Type      | Labels                           | Description                                                                  |
+| --------------------------------- | --------- | -------------------------------- | ---------------------------------------------------------------------------- |
+| `http_request_duration_seconds`   | Histogram | `method`, `route`, `status_code` | Duration of HTTP requests in seconds                                         |
+| `http_requests_total`             | Counter   | `method`, `route`, `status_code` | Total number of HTTP requests                                                |
+| `rate_limit_hits_total`           | Counter   | `limiter_type`                   | Total number of rate limit hits                                              |
+| `rate_limit_store_fallback_total` | Counter   | `limiter_type`                   | Rate-limit checks served by the in-memory fallback store (Redis unavailable) |
+| `db_query_duration_seconds`       | Histogram | `operation`, `model`             | Duration of database queries in seconds                                      |
+| `active_connections`              | Gauge     | --                               | Number of active HTTP connections                                            |
+| `audit_write_failures_total`      | Counter   | `reason`                         | Audit-log writes that failed outside a `$transaction` (auth events)          |
+| `db_pool_total_connections`       | Gauge     | --                               | Total connections currently held by the pool (idle + checked out)            |
+| `db_pool_idle_connections`        | Gauge     | --                               | Connections sitting idle in the pool                                         |
+| `db_pool_waiting_clients`         | Gauge     | --                               | Clients waiting for a connection because the pool is saturated               |
+| `db_pool_max_connections`         | Gauge     | --                               | Configured pool maximum (`DB_POOL_MAX`)                                      |
 
 **Default Node.js Metrics** (via `prom-client`):
 
@@ -817,6 +825,18 @@ scrape_configs:
 
 ---
 
+## Echo (benchmark)
+
+**GET/POST** `/echo`
+
+Benchmark-only echo routes, mounted **only when `ENABLE_ECHO_ROUTES=true`** (default: `true` outside
+production, `false` in production — enabling in production additionally requires
+`ENABLE_ECHO_ROUTES_PRODUCTION_CONFIRM=true`). They bypass logging and rate limiting, so they must
+never be exposed on a process serving real traffic. Used to isolate framework overhead — see
+[benchmarks.md](benchmarks.md).
+
+---
+
 ## Error Responses
 
 All error responses follow a structured format with error codes for client-side handling:
@@ -838,12 +858,19 @@ All error responses follow a structured format with error codes for client-side 
 
 ```json
 {
-  "error": [
-    {
-      "field": "password",
-      "message": "Password must contain uppercase, lowercase, number and special character"
+  "error": {
+    "code": "VALIDATION_ERROR",
+    "message": "Validation failed",
+    "details": {
+      "fields": [
+        {
+          "field": "password",
+          "message": "Password must contain uppercase, lowercase, number and special character"
+        }
+      ]
     }
-  ]
+  },
+  "requestId": "abc123"
 }
 ```
 
@@ -905,23 +932,25 @@ All error responses follow a structured format with error codes for client-side 
 
 ### Error Codes Reference
 
-| Code                     | HTTP Status | Description                                                       |
-| ------------------------ | ----------- | ----------------------------------------------------------------- |
-| `INVALID_CREDENTIALS`    | 401         | Wrong email or password                                           |
-| `NO_TOKEN`               | 401         | No authentication token provided                                  |
-| `INVALID_TOKEN`          | 401         | Token is invalid or expired                                       |
-| `TODO_NOT_FOUND`         | 404         | Todo does not exist or belongs to another user                    |
-| `USER_NOT_FOUND`         | 404         | Authenticated user's account no longer exists                     |
-| `FORBIDDEN`              | 403         | Authenticated but not authorized (e.g. admin role required)       |
-| `ROUTE_NOT_FOUND`        | 404         | API endpoint does not exist                                       |
-| `DUPLICATE_EMAIL`        | 409         | Email already registered                                          |
-| `DUPLICATE_VALUE`        | 409         | Unique constraint violation                                       |
-| `INVALID_ID_FORMAT`      | 400         | Invalid UUID format                                               |
-| `INVALID_JSON`           | 400         | Request body contains invalid JSON                                |
-| `FOREIGN_KEY_CONSTRAINT` | 409.        | Foreign-key constraint violation                                  |
-| `SERVICE_UNAVAILABLE`    | 503         | Generic transient unavailability — retry with `Retry-After`       |
-| `DATABASE_UNAVAILABLE`   | 503         | Database unreachable or pool exhausted — retry with `Retry-After` |
-| `INTERNAL_ERROR`         | 500         | Unexpected server error                                           |
+| Code                     | HTTP Status | Description                                                             |
+| ------------------------ | ----------- | ----------------------------------------------------------------------- |
+| `INVALID_CREDENTIALS`    | 401         | Wrong email or password                                                 |
+| `NO_TOKEN`               | 401         | No authentication token provided                                        |
+| `INVALID_TOKEN`          | 401         | Token is invalid or expired                                             |
+| `TODO_NOT_FOUND`         | 404         | Todo does not exist or belongs to another user                          |
+| `USER_NOT_FOUND`         | 404         | Authenticated user's account no longer exists                           |
+| `FORBIDDEN`              | 403         | Authenticated but not authorized (e.g. admin role required)             |
+| `ROUTE_NOT_FOUND`        | 404         | API endpoint does not exist                                             |
+| `DUPLICATE_EMAIL`        | 409         | Email already registered                                                |
+| `DUPLICATE_VALUE`        | 409         | Unique constraint violation                                             |
+| `VALIDATION_ERROR`       | 400         | Request failed Joi validation (`details.fields` lists per-field errors) |
+| `INVALID_ID_FORMAT`      | 400         | Invalid UUID format                                                     |
+| `INVALID_JSON`           | 400         | Request body contains invalid JSON                                      |
+| `PAYLOAD_TOO_LARGE`      | 413         | Request body exceeds the configured `BODY_LIMIT` (default 16kb)         |
+| `FOREIGN_KEY_CONSTRAINT` | 409.        | Foreign-key constraint violation                                        |
+| `SERVICE_UNAVAILABLE`    | 503         | Generic transient unavailability — retry with `Retry-After`             |
+| `DATABASE_UNAVAILABLE`   | 503         | Database unreachable or pool exhausted — retry with `Retry-After`       |
+| `INTERNAL_ERROR`         | 500         | Unexpected server error                                                 |
 
 ### Status Codes
 
@@ -934,6 +963,7 @@ All error responses follow a structured format with error codes for client-side 
 | **401** | Unauthorized          | Invalid/missing token, wrong credentials  |
 | **404** | Not Found             | Resource doesn't exist                    |
 | **409** | Conflict              | Unique constraint violation               |
+| **413** | Payload Too Large     | Request body exceeds `BODY_LIMIT`         |
 | **429** | Too Many Requests     | Rate limit exceeded                       |
 | **500** | Internal Server Error | Server-side errors (not retryable)        |
 | **503** | Service Unavailable   | Database unavailable, health check failed |

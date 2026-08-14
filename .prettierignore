@@ -1,0 +1,6 @@
+# Generated files — formatting churn with no benefit, and reformatting the
+# lockfile risks pnpm parse friction.
+pnpm-lock.yaml
+prisma/generated
+dist
+coverage

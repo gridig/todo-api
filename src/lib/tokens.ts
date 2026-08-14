@@ -10,9 +10,7 @@ const MS_PER_DAY = 24 * 60 * 60 * 1000;
 // during a rotation window so tokens signed before the cutover keep verifying
 // until they expire; signing always uses JWT_SECRET alone.
 export function accessTokenSecrets(): string[] {
-  return env.JWT_SECRET_PREVIOUS
-    ? [env.JWT_SECRET, env.JWT_SECRET_PREVIOUS]
-    : [env.JWT_SECRET];
+  return env.JWT_SECRET_PREVIOUS ? [env.JWT_SECRET, env.JWT_SECRET_PREVIOUS] : [env.JWT_SECRET];
 }
 
 // Single source of truth for the access-token shape. Payload carries the RFC

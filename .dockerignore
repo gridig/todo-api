@@ -3,7 +3,11 @@ dist
 coverage
 logs
 .git
+.github
 .gitattributes
+.gitleaks.toml
+.prettierrc
+.claude
 .DS_Store
 .pnpm-store
 .env
@@ -14,6 +18,14 @@ __tests__
 jest.config.ts
 tsconfig.test.json
 eslint.config.js
+benchmarks
+docs
+docker
 plans
+# Locally-generated Prisma client: `COPY prisma ./prisma` must bring schema +
+# migrations only — the image regenerates the client itself, and a stale dev
+# copy must never ride along in a layer.
+prisma/generated
 *.tsbuildinfo
-*.md
+# Docker pattern semantics: bare `*.md` matches root-level only.
+**/*.md

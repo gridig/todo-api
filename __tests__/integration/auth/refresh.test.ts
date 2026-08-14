@@ -61,9 +61,7 @@ describe('POST /auth/refresh', () => {
   });
 
   it('rejects an unknown refresh token with 401', async () => {
-    const res = await request(app)
-      .post('/auth/refresh')
-      .send({ refreshToken: 'not-a-real-token' });
+    const res = await request(app).post('/auth/refresh').send({ refreshToken: 'not-a-real-token' });
     expect(res.status).toBe(401);
     expect(res.body.error.code).toBe('INVALID_TOKEN');
   });
@@ -102,10 +100,35 @@ describe('POST /auth/refresh', () => {
     expect(afterReuse.status).toBe(401);
 
     // A security audit row is recorded for the reuse event.
-    const auditRow = await pollForAuditRow(
-      'action = $1 AND changed_by = $2',
-      ['auth.refresh.reuse', userId],
-    );
+    const auditRow = await pollForAuditRow('action = $1 AND changed_by = $2', [
+      'auth.refresh.reuse',
+      userId,
+    ]);
     expect(auditRow).not.toBeNull();
+  });
+
+  it('concurrent refreshes with the same token: exactly one wins, then everything is revoked', async () => {
+    // The rotation race branch (rotate() returns null for the loser): two
+    // in-flight refreshes present the same token. The guarded revoke
+    // (`revokedAt: null` filter) lets exactly one issue a successor; the loser
+    // is ambiguous between double-submit and theft, so the route errs toward
+    // security and revokes the user's entire token set — including the
+    // winner's freshly-issued token.
+    const { refreshToken } = await registerUser();
+
+    const [a, b] = await Promise.all([
+      request(app).post('/auth/refresh').send({ refreshToken }),
+      request(app).post('/auth/refresh').send({ refreshToken }),
+    ]);
+
+    const statuses = [a.status, b.status].sort();
+    expect(statuses).toEqual([200, 401]);
+
+    // The revoke-all fired by the loser must kill the winner's successor too.
+    const winner = a.status === 200 ? a : b;
+    const followUp = await request(app)
+      .post('/auth/refresh')
+      .send({ refreshToken: winner.body.refreshToken });
+    expect(followUp.status).toBe(401);
   });
 });

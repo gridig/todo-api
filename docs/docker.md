@@ -43,16 +43,16 @@ curl http://localhost:3001/health/ready
 
 ### Postgres (TimescaleDB + pgBackRest)
 
-| Property     | Value                                                              |
-| ------------ | ------------------------------------------------------------------ |
+| Property     | Value                                                                      |
+| ------------ | -------------------------------------------------------------------------- |
 | Image        | Built from `docker/timescaledb/Dockerfile` (TimescaleDB pg16 + pgBackRest) |
-| Container    | `todo-postgres`                                                    |
-| Port         | `5432`                                                             |
-| User         | `postgres`                                                         |
-| Password     | `postgres`                                                         |
-| Database     | `todo_api`                                                         |
-| Volumes      | `postgres_data` (data), `pgbackrest_data` (POSIX backup repo)      |
-| Health check | `pg_isready -U postgres` every 5s                                  |
+| Container    | `todo-postgres`                                                            |
+| Port         | `5432`                                                                     |
+| User         | `postgres`                                                                 |
+| Password     | `postgres`                                                                 |
+| Database     | `todo_api`                                                                 |
+| Volumes      | `postgres_data` (data), `pgbackrest_data` (POSIX backup repo)              |
+| Health check | `pg_isready -U postgres` every 5s                                          |
 
 The image co-locates pgBackRest with Postgres: the entrypoint writes `pgbackrest.conf` from env vars,
 enables WAL archiving, and runs a background scheduler (daily full + 6h differential). Locally it uses a

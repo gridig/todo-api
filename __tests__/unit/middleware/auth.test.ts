@@ -60,6 +60,22 @@ describe('Auth Middleware', () => {
     );
   });
 
+  it('treats an oversized Authorization header as no token (DoS cap)', () => {
+    // MAX_AUTH_HEADER_LEN (8 KiB) — an attacker-controlled multi-MB header must
+    // be dropped before toLowerCase(), not parsed. Expect the NO_TOKEN path.
+    req.header.mockReturnValue(`Bearer ${'a'.repeat(9000)}`);
+
+    auth(req, res, next);
+
+    expect(res.status).toHaveBeenCalledWith(401);
+    expect(res.json).toHaveBeenCalledWith(
+      expect.objectContaining({
+        error: expect.objectContaining({ code: 'NO_TOKEN' }),
+      }),
+    );
+    expect(next).not.toHaveBeenCalled();
+  });
+
   it('should reject invalid token', () => {
     req.header.mockReturnValue('Bearer invalid-token');
 

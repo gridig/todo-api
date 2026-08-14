@@ -29,7 +29,10 @@ router.get(
       ...(req.query.cursor !== undefined && { cursor: req.query.cursor as string }),
     };
     const result = await UserService.listUsers(params);
-    log.info({ adminId, count: result.data.length, hasMore: result.meta.hasMore }, 'Admin listed users');
+    log.info(
+      { adminId, count: result.data.length, hasMore: result.meta.hasMore },
+      'Admin listed users',
+    );
     res.json(result);
   },
 );

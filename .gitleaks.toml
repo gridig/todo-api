@@ -20,10 +20,6 @@ paths = [
   '''__tests__/unit/config/env-production\.test\.ts$''',
   '''__tests__/unit/lib/fieldCrypto\.test\.ts$''',
   '''__tests__/unit/lib/tokens\.test\.ts$''',
-  # API reference doc — contains illustrative example tokens (`eyJ…`, placeholder
-  # refresh tokens), never real credentials. Path-allowlisted because gitleaks
-  # scans git history: the example strings were committed and can't be un-added.
-  '''docs/api\.md$''',
 ]
 
 # Known placeholder strings that appear across docs and fixtures. These are not
@@ -34,4 +30,9 @@ regexes = [
   '''your-super-secret-jwt-key[a-z0-9-]*''',
   '''AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=''',
   '''TestPass123!''',
+  # The truncated textbook JWT header used as an illustrative token in
+  # docs/api.md (current + history). Allowlisting this exact string replaces
+  # the old whole-file path allowlist for api.md, so a REAL credential pasted
+  # into the doc is no longer invisible to the scanner.
+  '''eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9\.{3}''',
 ]

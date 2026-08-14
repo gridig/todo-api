@@ -50,7 +50,8 @@ export function parseArgs(argv: string[]): Options {
       throw new Error(`unexpected extra argument "${arg}"`);
     }
   }
-  if (!email) throw new Error('email is required: promote-admin <email> [--role=admin|user] [--force]');
+  if (!email)
+    throw new Error('email is required: promote-admin <email> [--role=admin|user] [--force]');
   return { email, role, force };
 }
 

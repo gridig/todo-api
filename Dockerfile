@@ -43,6 +43,12 @@ COPY --from=build /app/dist ./dist
 
 RUN chown -R appuser:appgroup /app/node_modules/.pnpm/@prisma+engines@*
 
+# Fail closed: this image only ever ships to deployed environments, so a
+# missing/typo'd platform NODE_ENV must land in production mode (guardrails
+# enforced: METRICS_TOKEN required, placeholder keys rejected, /echo off) —
+# not silently fall into the development defaults.
+ENV NODE_ENV=production
+
 USER appuser
 
 EXPOSE 3001

@@ -1,22 +1,33 @@
 -- Production role bootstrap. Run ONCE per environment as a superuser, BEFORE
 -- the first `prisma migrate deploy`:
 --
---   psql "$SUPERUSER_URL" \
---     -v admin_pw="$DB_ADMIN_PW" -v app_pw="$DB_APP_PW" -v aud_pw="$DB_AUDITOR_PW" \
---     -f prisma/sql/bootstrap_roles_prod.sql
+--   export DB_ADMIN_PW DB_APP_PW DB_AUDITOR_PW   # from your secret store
+--   psql "$SUPERUSER_URL" -f prisma/sql/bootstrap_roles_prod.sql
+--
+-- Passwords are read from the environment via \getenv (psql 15+) — NOT passed
+-- as -v arguments, which would expose the expanded values in `ps` output on
+-- the ops host for the lifetime of the psql process.
 --
 -- Unlike prisma/sql/bootstrap_roles.sql (dev/CI: fixed dev passwords, assumes a
 -- fresh schema via the docker initdb hook), this script:
---   * takes real passwords as psql variables (never literals in the repo),
+--   * takes real passwords from env vars (never literals in the repo),
 --   * is idempotent — skips roles that already exist,
+--   * runs in a single transaction — a mid-script failure leaves no
+--     half-granted state (roles + grants land together or not at all),
 --   * retrofits an EXISTING database (reassigns ownership + grants on tables
 --     created before the roles existed), so it doubles as the recovery step for
 --     the 2026-05-29 incident where prod ran as a single superuser.
 --
--- The three -v passwords are required on the FIRST run. On re-runs (roles already
--- present) they are not referenced, so they can be omitted. See docs/operations.md.
+-- The three env passwords are required on the FIRST run. On re-runs (roles
+-- already present) they are not referenced, so they can be unset. See
+-- docs/operations.md.
 
 \set ON_ERROR_STOP on
+\getenv admin_pw DB_ADMIN_PW
+\getenv app_pw DB_APP_PW
+\getenv aud_pw DB_AUDITOR_PW
+
+BEGIN;
 
 -- 1. Roles — create only if absent (idempotent; does NOT reset an existing password).
 SELECT (NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'db_admin'))::text AS _mk_admin \gset
@@ -78,3 +89,14 @@ DO $$ BEGIN
     GRANT SELECT ON public.audit_entries TO db_auditor;
   END IF;
 END $$;
+
+-- 7. The runtime role has no business writing migration history — step 5's
+--    blanket grant included _prisma_migrations; only db_admin (which runs
+--    `prisma migrate deploy`) needs DML there.
+DO $$ BEGIN
+  IF to_regclass('public._prisma_migrations') IS NOT NULL THEN
+    REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON public._prisma_migrations FROM db_app;
+  END IF;
+END $$;
+
+COMMIT;

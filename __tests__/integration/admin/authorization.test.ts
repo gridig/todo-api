@@ -49,7 +49,9 @@ describe('/admin authorization', () => {
   });
 
   it.each(routes)('unauthenticated is rejected: $method $path', async ({ method, path, body }) => {
-    const res = await request(app)[method](path).send(body ?? {});
+    const res = await request(app)
+      [method](path)
+      .send(body ?? {});
     expect(res.status).toBe(401);
   });
 

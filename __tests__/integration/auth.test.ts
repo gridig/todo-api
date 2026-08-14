@@ -31,10 +31,6 @@ describe('Authentication Endpoints', () => {
         password: 'TestPass123!',
       });
 
-      if (response.status !== 201) {
-        console.log('Error response:', response.body);
-      }
-
       expect(response.status).toBe(201);
       expect(response.body.token).toBeDefined();
 
@@ -135,18 +131,22 @@ describe('Authentication Endpoints', () => {
       // verify the call-graph property that produces timing parity:
       // comparePassword must be invoked even when findByEmail returns null.
       // If a future refactor reintroduces the short-circuit, this test fires.
+      // try/finally so a failed assertion can't leave the spy installed for
+      // the rest of the file.
       const compareSpy = jest.spyOn(UserService, 'comparePassword');
+      try {
+        await request(app).post('/auth/login').send({
+          email: 'never-registered@example.com',
+          password: 'Whatever123!',
+        });
 
-      await request(app).post('/auth/login').send({
-        email: 'never-registered@example.com',
-        password: 'Whatever123!',
-      });
-
-      expect(compareSpy).toHaveBeenCalledTimes(1);
-      const [, hashedPassword] = compareSpy.mock.calls[0]!;
-      // Confirm the hash passed is a real bcrypt hash (not '' or undefined)
-      expect(hashedPassword).toMatch(/^\$2[aby]?\$\d+\$/);
-      compareSpy.mockRestore();
+        expect(compareSpy).toHaveBeenCalledTimes(1);
+        const [, hashedPassword] = compareSpy.mock.calls[0]!;
+        // Confirm the hash passed is a real bcrypt hash (not '' or undefined)
+        expect(hashedPassword).toMatch(/^\$2[aby]?\$\d+\$/);
+      } finally {
+        compareSpy.mockRestore();
+      }
     });
 
     it('should treat emails as case-insensitive', async () => {

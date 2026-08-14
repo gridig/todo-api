@@ -18,9 +18,12 @@ DO_RESTORE="${PGBACKREST_RESTORE:-0}"
 RESTORE_ARGS="${PGBACKREST_RESTORE_ARGS:-}"
 unset PGBACKREST_RESTORE PGBACKREST_RESTORE_ARGS
 
-# A backup misconfiguration must NEVER stop the database from starting. If the repo
-# isn't fully configured, boot Postgres without archiving and log loudly instead of
-# crash-looping the container.
+# An s3 repo with missing credentials FAILS CLOSED: nothing scrapes the backup
+# metrics yet, so "Postgres up, archiving silently off" is an unbacked-up
+# production database with zero signal — a visible refused boot is the only
+# alert we actually have. PGBACKREST_ALLOW_UNCONFIGURED=true is the explicit,
+# deliberate escape hatch (emergency boot / scratch environments), mirroring
+# the app's *_PRODUCTION_CONFIRM flag pattern.
 missing=""
 if [[ "$REPO_TYPE" == "s3" ]]; then
   for v in PGBACKREST_REPO_S3_ENDPOINT PGBACKREST_REPO_S3_BUCKET \
@@ -30,12 +33,24 @@ if [[ "$REPO_TYPE" == "s3" ]]; then
 fi
 
 if [[ -n "$missing" ]]; then
-  echo "WARNING: pgBackRest repo not configured (missing:${missing})." >&2
-  echo "WARNING: starting Postgres WITHOUT archiving/backups. Set the vars and redeploy to enable." >&2
-  exec docker-entrypoint.sh postgres
+  if [[ "${PGBACKREST_ALLOW_UNCONFIGURED:-}" == "true" ]]; then
+    echo "WARNING: pgBackRest repo not configured (missing:${missing})." >&2
+    echo "WARNING: PGBACKREST_ALLOW_UNCONFIGURED=true — starting Postgres WITHOUT archiving/backups." >&2
+    exec docker-entrypoint.sh postgres
+  fi
+  echo "ERROR: pgBackRest repo not configured (missing:${missing})." >&2
+  echo "ERROR: refusing to start an unbacked-up database. Set the vars and redeploy," >&2
+  echo "ERROR: or set PGBACKREST_ALLOW_UNCONFIGURED=true to boot without backups deliberately." >&2
+  exit 1
 fi
 
 mkdir -p /etc/pgbackrest /var/log/pgbackrest "${PGBACKREST_REPO_PATH:-/var/lib/pgbackrest}"
+
+# The config carries S3 credentials and the repo cipher passphrase — it must
+# never be world-readable (default umask would leave it 0644 for any shell in
+# the container). Create it 0600 BEFORE a single secret is written; the `>`
+# redirect below truncates in place and keeps the mode.
+install -m 600 /dev/null "$CONF"
 
 {
   echo "[global]"
@@ -74,6 +89,7 @@ mkdir -p /etc/pgbackrest /var/log/pgbackrest "${PGBACKREST_REPO_PATH:-/var/lib/p
 
 # archive_command runs as the postgres OS user and must be able to read the config.
 chown -R postgres:postgres /etc/pgbackrest /var/log/pgbackrest "${PGBACKREST_REPO_PATH:-/var/lib/pgbackrest}"
+chmod 600 "$CONF"
 
 # Restore mode: populate an (empty/--delta) PGDATA from the repo BEFORE Postgres starts.
 # The stock entrypoint then sees populated data, skips initdb, starts Postgres, and

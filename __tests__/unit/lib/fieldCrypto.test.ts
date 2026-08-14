@@ -41,11 +41,28 @@ describe('fieldCrypto — encryptField / decryptField', () => {
     expect(decryptField('legacy@example.com')).toBe('legacy@example.com');
   });
 
-  it('throws when the authentication tag / ciphertext is tampered (GCM integrity)', () => {
+  // Envelope layout: enc:1:<keyId>:<iv>:<tag>:<ct> — parts[3]=iv, [4]=tag, [5]=ct.
+  it('throws when the authentication tag is tampered (GCM integrity)', () => {
     const parts = encryptField('tamper@me.com').split(':');
-    const ct = Buffer.from(parts[4] as string, 'base64'); // auth tag segment
+    const tag = Buffer.from(parts[4] as string, 'base64');
+    tag[0] = tag[0]! ^ 0xff;
+    parts[4] = tag.toString('base64');
+    expect(() => decryptField(parts.join(':'))).toThrow();
+  });
+
+  it('throws when the ciphertext body is tampered (GCM integrity)', () => {
+    const parts = encryptField('tamper@me.com').split(':');
+    const ct = Buffer.from(parts[5] as string, 'base64');
     ct[0] = ct[0]! ^ 0xff;
-    parts[4] = ct.toString('base64');
+    parts[5] = ct.toString('base64');
+    expect(() => decryptField(parts.join(':'))).toThrow();
+  });
+
+  it('throws when the IV is tampered (GCM integrity)', () => {
+    const parts = encryptField('tamper@me.com').split(':');
+    const iv = Buffer.from(parts[3] as string, 'base64');
+    iv[0] = iv[0]! ^ 0xff;
+    parts[3] = iv.toString('base64');
     expect(() => decryptField(parts.join(':'))).toThrow();
   });
 

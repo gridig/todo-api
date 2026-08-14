@@ -84,9 +84,13 @@ describe('GET /todos - List Todos', () => {
       expect(secondPage.body.meta.hasMore).toBe(false);
       expect(secondPage.body.meta.nextCursor).toBeNull();
 
-      const firstPageIds = firstPage.body.data.map((t: { id: string }) => t.id);
-      const secondPageIds = secondPage.body.data.map((t: { id: string }) => t.id);
-      expect(firstPageIds).not.toEqual(expect.arrayContaining(secondPageIds));
+      const firstPageIds: string[] = firstPage.body.data.map((t: { id: string }) => t.id);
+      const secondPageIds: string[] = secondPage.body.data.map((t: { id: string }) => t.id);
+      // No row may appear on both pages — a single re-served row is a
+      // pagination bug (`not.toEqual(arrayContaining(...))` would only catch
+      // page 1 containing EVERY page-2 id).
+      const overlap = firstPageIds.filter((id) => secondPageIds.includes(id));
+      expect(overlap).toEqual([]);
     });
 
     it('should default to limit 20 and not exceed it', async () => {

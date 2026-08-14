@@ -290,7 +290,7 @@ Production deploys to Railway via [`.github/workflows/deploy.yml`](../.github/wo
 | **TimescaleDB extension** | Not available               | First-class                                                                      |
 | **Backups**               | Managed by Railway (opaque) | Operated via pgBackRest (PITR, verified, in-vendor)                              |
 | **Failover**              | Managed                     | Manual unless replica is added — acceptable for current scale                    |
-| **Connection pooling**    | Pgbouncer optional          | Application pool (`src/lib/prisma.ts`) — no change                                   |
+| **Connection pooling**    | Pgbouncer optional          | Application pool (`src/lib/prisma.ts`) — no change                               |
 | **Upgrade cadence**       | Auto                        | Manual image bump — kept aligned with the `timescale/timescaledb:latest-pgN` tag |
 | **Cost**                  | Per-GB managed pricing      | Container + volume + Bucket egress (egress within Railway is free)               |
 
@@ -325,16 +325,16 @@ process-max=2
 pg1-path=/var/lib/postgresql/data
 ```
 
-| Setting       | Value                          | Reason                                                  |
-| ------------- | ------------------------------ | ------------------------------------------------------- |
-| Full backup   | Daily, 02:00 UTC               | Low-traffic window; 7-day rolling window                |
-| Differential  | Every 6h                       | Bounds restore time without exploding storage           |
-| WAL archiving | Continuous (`archive_command`) | Point-in-time recovery to any second within retention   |
-| Encryption    | AES-256-CBC                    | At-rest in Bucket; cipher pass lives in Railway secrets |
+| Setting       | Value                                       | Reason                                                    |
+| ------------- | ------------------------------------------- | --------------------------------------------------------- |
+| Full backup   | Daily, 02:00 UTC                            | Low-traffic window; 7-day rolling window                  |
+| Differential  | Every 6h                                    | Bounds restore time without exploding storage             |
+| WAL archiving | Continuous (`archive_command`)              | Point-in-time recovery to any second within retention     |
+| Encryption    | AES-256-CBC                                 | At-rest in Bucket; cipher pass lives in Railway secrets   |
 | Retention     | 35-day PITR window (≥ 30-day roadmap floor) | `repo1-retention-full=35`; Bucket lifecycle as safety net |
-| Compression   | Default (gz, level 6)          | Built into pgBackRest; trades CPU for storage           |
+| Compression   | Default (gz, level 6)                       | Built into pgBackRest; trades CPU for storage             |
 
-The 35-day figure is the **backup/PITR window**, distinct from data retention: the 1-year SOC 2 audit-data requirement is met by the in-DB retention policy (`add_retention_policy('audit_entries', INTERVAL '1 year')`), not by holding a year of physical backups. If a 1-year recoverable *copy* is ever required, export a periodic full to cold storage rather than inflating `repo1-retention-full`.
+The 35-day figure is the **backup/PITR window**, distinct from data retention: the 1-year SOC 2 audit-data requirement is met by the in-DB retention policy (`add_retention_policy('audit_entries', INTERVAL '1 year')`), not by holding a year of physical backups. If a 1-year recoverable _copy_ is ever required, export a periodic full to cold storage rather than inflating `repo1-retention-full`.
 
 **Recovery targets:**
 
@@ -422,11 +422,11 @@ For SOC 2, security events may need 3-year retention. Handle with two tables or 
 
 REVOKE-based immutability only works if the application connects as a non-superuser. The project uses a three-role model that maps directly to the SOC 2 Access Control Policy:
 
-| Role                | Used by                                                   | Privileges                                                                                     |
-| ------------------- | --------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
-| `db_admin`        | Prisma migrations (CI deploy step, manual ops)            | Schema OWNER, DDL, all DML                                                                     |
-| `db_app`          | Application runtime ([`src/lib/prisma.ts`](../src/lib/prisma.ts)) | `SELECT, INSERT, UPDATE, DELETE` on `users`, `todos`; `SELECT, INSERT` only on `audit_entries` |
-| `db_auditor` | Security/compliance dashboards, ad-hoc auditor queries    | `SELECT` on `audit_entries` only                                                               |
+| Role         | Used by                                                           | Privileges                                                                                     |
+| ------------ | ----------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| `db_admin`   | Prisma migrations (CI deploy step, manual ops)                    | Schema OWNER, DDL, all DML                                                                     |
+| `db_app`     | Application runtime ([`src/lib/prisma.ts`](../src/lib/prisma.ts)) | `SELECT, INSERT, UPDATE, DELETE` on `users`, `todos`; `SELECT, INSERT` only on `audit_entries` |
+| `db_auditor` | Security/compliance dashboards, ad-hoc auditor queries            | `SELECT` on `audit_entries` only                                                               |
 
 ```sql
 -- Role bootstrap (run once per environment as superuser; prisma/sql/bootstrap_roles.sql)
@@ -536,8 +536,8 @@ The stable action vocabulary lives in `src/lib/auditActions.ts` as exported cons
 | TimescaleDB extension missing (e.g., wrong image deployed) | Migration fails at `CREATE EXTENSION timescaledb`                                                    | Deploy blocked; alert via CI                                                                                                  |
 | Hypertable chunk creation lag                              | `SELECT count(*) FROM timescaledb_information.chunks WHERE hypertable_name='audit_entries'` plateaus | Daily check job; alert if no new chunk in 8 days                                                                              |
 | Retention policy disabled / misconfigured                  | `SELECT * FROM timescaledb_information.jobs WHERE proc_name='policy_retention'` returns empty        | Daily check; alert if missing                                                                                                 |
-| REVOKE accidentally rolled back                            | Smoke probe attempts `UPDATE audit_entries SET ...` as `db_app` and expects 42501                  | Post-deploy job in [`.github/workflows/deploy.yml`](../.github/workflows/deploy.yml); fails the deploy if the UPDATE succeeds |
-| pgBackRest backup fails                                    | `pgbackrest info` exit code non-zero                                                                 | In-container scheduler writes Prometheus metrics; alert on stale `pgbackrest_last_full_backup_age_seconds` > 30h               |
+| REVOKE accidentally rolled back                            | Smoke probe attempts `UPDATE audit_entries SET ...` as `db_app` and expects 42501                    | Post-deploy job in [`.github/workflows/deploy.yml`](../.github/workflows/deploy.yml); fails the deploy if the UPDATE succeeds |
+| pgBackRest backup fails                                    | `pgbackrest info` exit code non-zero                                                                 | In-container scheduler writes Prometheus metrics; alert on stale `pgbackrest_last_full_backup_age_seconds` > 30h              |
 | WAL archive lag                                            | `pg_stat_archiver.last_failed_wal` non-null or `last_archived_time` stale                            | Alert if lag > 5 min (RPO budget)                                                                                             |
 | Bucket lifecycle policy drift                              | Periodic check against expected retention                                                            | Quarterly review during DR drill                                                                                              |
 

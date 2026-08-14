@@ -30,7 +30,7 @@ pnpm run test:integration
 # Unit tests only
 pnpm run test:unit
 
-# CI mode (coverage + 2 workers)
+# CI mode (coverage, single worker — maxWorkers: 1)
 pnpm run test:ci
 ```
 
@@ -43,28 +43,34 @@ __tests__/
 │   ├── testSetup.ts                # App factory, user creation, DB lifecycle
 │   └── todoHelpers.ts              # Todo creation utilities
 ├── integration/
+│   ├── auditLog.test.ts            # Audit-log emission and immutability
 │   ├── auth.test.ts                # Registration and login
 │   ├── cors.test.ts                # CORS configuration
+│   ├── echo.test.ts                # /echo benchmark routes
 │   ├── health.test.ts              # Health check endpoints
+│   ├── metrics.test.ts             # /metrics endpoint and bearer auth
+│   ├── pool-metrics.test.ts        # db_pool_* gauges
+│   ├── rateLimit.test.ts           # Rate limiting
 │   ├── routes-smoke.test.ts        # Route smoke tests
 │   ├── todos.test.ts               # Todo endpoint integration tests
-│   └── todos/
-│       ├── create-todo.test.ts     # POST /todos
-│       ├── delete-todo.test.ts     # DELETE /todos/:id
-│       ├── get-single-todo.test.ts # GET /todos/:id
-│       ├── get-todos.test.ts       # GET /todos
-│       └── update-todo.test.ts     # PATCH /todos/:id
+│   ├── admin/                      # /admin surface: authorization, list-users,
+│   │                               #   update-role, delete-user
+│   ├── auth/                       # refresh, logout, logout-all
+│   ├── todos/                      # Per-endpoint CRUD: create, delete,
+│   │                               #   get-single, get-all, update
+│   └── user/                       # /user/me: get-me, update-profile, change-email,
+│                                   #   change-password, delete-account, export
 └── unit/
-    ├── middleware/
-    │   ├── auth.test.ts            # JWT authentication
-    │   ├── errorHandler.test.ts    # Centralized error handling
-    │   ├── rateLimiter.test.ts     # Rate limiting
-    │   ├── requestId.test.ts       # Request ID generation
-    │   ├── requestLogger.test.ts   # Request/response logging
-    │   └── validation.test.ts      # Joi validation
-    └── models/
-        ├── Todo.test.ts            # Todo model
-        └── User.test.ts            # User model
+    ├── migrations-guard.test.ts    # Blocks migrations touching audit_entries
+    ├── schema-cascade-guard.test.ts # Guards FK cascade declarations in the schema
+    ├── config/                     # env-production assertions
+    ├── lib/                        # dbConnect, fieldCrypto, retry, tokens
+    ├── middleware/                 # auth, cors-helpers, errorHandler, metricsAuth,
+    │                               #   rateLimiter (+ Redis store/fallback),
+    │                               #   requestId, requestLogger, validation
+    ├── models/                     # Todo, User, deleteMany-guard
+    ├── routes/                     # auth-helpers
+    └── scripts/                    # preflight-roles, promote-admin
 ```
 
 ## Coverage Requirements
@@ -78,7 +84,7 @@ Minimum **80%** across all four metrics, enforced via Jest thresholds:
 | Lines      | 80%       |
 | Statements | 80%       |
 
-Coverage is collected from `src/models/`, `src/middleware/`, and `src/routes/`. `src/middleware/logger.ts` is excluded (Pino internals are not unit-testable).
+Coverage is collected from all of `src/**` except `src/index.ts` (process bootstrap), `src/middleware/logger.ts` (Pino transport config), and `src/types/` (no runtime code) — see `collectCoverageFrom` in `jest.config.ts`.
 
 Run `pnpm run test:coverage` to generate a report.
 
@@ -86,17 +92,17 @@ Run `pnpm run test:coverage` to generate a report.
 
 ### `testSetup.ts`
 
-| Function                 | Purpose                                                           |
-| ------------------------ | ----------------------------------------------------------------- |
-| `generateUniqueId()`     | Returns a `crypto.randomUUID()` for test isolation                |
-| `createTestApp()`        | Returns the Express `Application` instance                        |
-| `createTestUser(email?)` | Creates a user + JWT token, returns `{ user, authToken, userId }` |
-| `createTestAdmin(email?)`| Like `createTestUser`, then sets the user's role to `admin` (same return shape) — use for `/admin` route tests |
-| `connectTestDB()`        | Connects Prisma to the test database                              |
-| `disconnectTestDB()`     | Disconnects Prisma and closes the connection pool (incl. the privileged audit-admin pool) |
-| `cleanupTestData()`      | Deletes refresh tokens, then todos, then users (respects FK constraints) |
-| `truncateAuditEntries()` | `TRUNCATE audit_entries` via a privileged admin pool — the runtime `db_app` role can't; call in `afterEach` for suites asserting on audit rows |
-| `pollForAuditRow(where, params?)` | Polls `audit_entries` for a matching row (audit writes are fire-and-forget, so the row may lag the HTTP response) |
+| Function                          | Purpose                                                                                                                                        |
+| --------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| `generateUniqueId()`              | Returns a `crypto.randomUUID()` for test isolation                                                                                             |
+| `createTestApp()`                 | Returns the Express `Application` instance                                                                                                     |
+| `createTestUser(email?)`          | Creates a user + JWT token, returns `{ user, authToken, userId }`                                                                              |
+| `createTestAdmin(email?)`         | Like `createTestUser`, then sets the user's role to `admin` (same return shape) — use for `/admin` route tests                                 |
+| `connectTestDB()`                 | Connects Prisma to the test database                                                                                                           |
+| `disconnectTestDB()`              | Disconnects Prisma and closes the connection pool (incl. the privileged audit-admin pool)                                                      |
+| `cleanupTestData()`               | Deletes refresh tokens, then todos, then users (respects FK constraints)                                                                       |
+| `truncateAuditEntries()`          | `TRUNCATE audit_entries` via a privileged admin pool — the runtime `db_app` role can't; call in `afterEach` for suites asserting on audit rows |
+| `pollForAuditRow(where, params?)` | Polls `audit_entries` for a matching row (audit writes are fire-and-forget, so the row may lag the HTTP response)                              |
 
 ### `todoHelpers.ts`
 
@@ -207,35 +213,39 @@ Create a `.env.test` file in the project root with the following variables:
 
 ### Required
 
-| Variable       | Description                  | Example                                                  |
-| -------------- | ---------------------------- | -------------------------------------------------------- |
-| `DATABASE_URL` | PostgreSQL connection string | `postgresql://postgres:postgres@localhost:5432/todo_api` |
-| `JWT_SECRET`   | JWT signing key (any value)  | `jwt-secret-key-for-testing-only`                        |
-| `NODE_ENV`     | Must be `test`               | `test`                                                   |
+| Variable               | Description                                                                                                                                                                                       | Example                                                      |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------ |
+| `DATABASE_URL`         | Runtime app connection string (restricted `db_app` role)                                                                                                                                          | `postgresql://db_app:db_app_dev@localhost:5432/todo_api`     |
+| `DATABASE_MIGRATE_URL` | Admin DSN (`db_admin`) — used by `prisma migrate deploy` and by the privileged TRUNCATE pool in `testSetup.ts` (audit-log suites fail without it, since `db_app` cannot TRUNCATE `audit_entries`) | `postgresql://db_admin:db_admin_dev@localhost:5432/todo_api` |
+| `JWT_SECRET`           | JWT signing key (any value)                                                                                                                                                                       | `jwt-secret-key-for-testing-only`                            |
+| `NODE_ENV`             | Must be `test`                                                                                                                                                                                    | `test`                                                       |
+| `CORS_ORIGIN`          | Allowed CORS origins — **no default**, the app fails to boot without it; `cors.test.ts` asserts on specific echoed origins                                                                        | `http://localhost:3000,http://localhost:5173`                |
 
 ### Optional (have defaults)
 
-| Variable            | Default                            | Description                                                 |
-| ------------------- | ---------------------------------- | ----------------------------------------------------------- |
-| `PORT`              | `3001`                             | Server port (tests use Supertest, so the port is not bound) |
-| `CORS_ORIGIN`       | `*`                                | Allowed CORS origins                                        |
-| `CORS_CREDENTIALS`  | `false`                            | Allow credentials in CORS                                   |
-| `CORS_METHODS`      | `GET,HEAD,PUT,PATCH,POST,DELETE`   | Allowed HTTP methods                                        |
-| `CORS_HEADERS`      | `Content-Type,Authorization`       | Allowed HTTP headers                                        |
-| `CORS_MAX_AGE`      | `86400`                            | Preflight cache duration (seconds)                          |
-| `LOG_LEVEL`         | Auto-determined (`silent` in test) | Logging level                                               |
-| `LOG_FILE_PATH`     | `./logs/app`                       | Log file base path                                          |
-| `LOG_MAX_FILE_SIZE` | `10m`                              | Max log file size before rotation                           |
+| Variable           | Default                            | Description                                                                                                                                     |
+| ------------------ | ---------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| `PORT`             | `3001`                             | Server port (tests use Supertest, so the port is not bound)                                                                                     |
+| `CORS_CREDENTIALS` | `false`                            | Allow credentials in CORS                                                                                                                       |
+| `CORS_METHODS`     | `GET,HEAD,POST,PATCH,DELETE`       | Allowed HTTP methods                                                                                                                            |
+| `CORS_HEADERS`     | `Content-Type,Authorization`       | Allowed HTTP headers                                                                                                                            |
+| `CORS_MAX_AGE`     | `86400`                            | Preflight cache duration (seconds)                                                                                                              |
+| `LOG_LEVEL`        | Auto-determined (`silent` in test) | Logging level                                                                                                                                   |
+| `METRICS_TOKEN`    | _(unset)_                          | Bearer token for `GET /metrics` and `GET /health/ready/detailed` — the metrics and detailed-readiness integration tests need it set (32+ chars) |
 
 ### Minimal `.env.test`
 
 Most optional variables can be omitted. A minimal file looks like:
 
 ```env
-DATABASE_URL="postgresql://postgres:postgres@localhost:5432/todo_api"
+DATABASE_URL="postgresql://db_app:db_app_dev@localhost:5432/todo_api"
+DATABASE_MIGRATE_URL="postgresql://db_admin:db_admin_dev@localhost:5432/todo_api"
 NODE_ENV=test
 JWT_SECRET=jwt-secret-key-for-testing-only
+CORS_ORIGIN=http://localhost:3000,http://localhost:5173
 PORT=3002
+# Needed by the /metrics and /health/ready/detailed suites:
+METRICS_TOKEN=test-metrics-token-please-replace-32-chars
 ```
 
 `NODE_ENV` and `JWT_SECRET` are also hardcoded in `__tests__/setup.ts` as a safety net, but including them in `.env.test` keeps the file self-documenting.

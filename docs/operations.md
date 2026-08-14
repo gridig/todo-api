@@ -17,13 +17,16 @@ so **these roles must exist before the first `prisma migrate deploy`.**
   once, as a superuser, with real passwords from your secret store:
 
   ```bash
-  psql "$SUPERUSER_URL" \
-    -v admin_pw="$DB_ADMIN_PW" -v app_pw="$DB_APP_PW" -v aud_pw="$DB_AUDITOR_PW" \
-    -f prisma/sql/bootstrap_roles_prod.sql
+  export DB_ADMIN_PW DB_APP_PW DB_AUDITOR_PW   # from your secret store
+  psql "$SUPERUSER_URL" -f prisma/sql/bootstrap_roles_prod.sql
   ```
 
-  It is idempotent (skips roles that already exist) and safe against a populated DB (it also
-  reassigns existing-table ownership to `db_admin` and grants `db_app`). Then set the service vars:
+  The script reads the passwords from the environment via `\getenv` (psql 15+) so they never
+  appear on the command line — passing them as `-v` arguments would expose the expanded values
+  in `ps` output for the lifetime of the psql process. It is idempotent (skips roles that already
+  exist), runs in a single transaction (a mid-script failure leaves no half-granted state), and is
+  safe against a populated DB (it also reassigns existing-table ownership to `db_admin` and grants
+  `db_app`). Then set the service vars:
 
   ```
   DATABASE_URL=postgresql://db_app:<app_pw>@<host>:5432/<db>
@@ -51,7 +54,7 @@ deploy (non-zero exit → Railway keeps the previous version serving) on failure
    string, so the migrate/verify gate can't be silently skipped.
 
 **Multi-phase (expand → backfill → contract) migrations** — e.g. the email-encryption rollout — require an
-operator-run data backfill *between* migrations that `prisma migrate deploy` cannot perform, so step 2
+operator-run data backfill _between_ migrations that `prisma migrate deploy` cannot perform, so step 2
 fails and **correctly blocks auto-deploy**. Roll them out manually: apply the expand migration, run the
 backfill (`node dist/scripts/backfill-email-crypto.js --phase=…`), then apply the enforce/contract
 migrations (see "Field encryption key management & rotation" below), and only then redeploy. Do **not**
@@ -272,7 +275,7 @@ Access is governed by Railway's secret-access controls (see [Secrets access poli
 The window must be **at least `ACCESS_TOKEN_EXPIRY`** (default 15m) so every token signed with the old
 secret has expired before the old secret is removed.
 
-1. **Open the window.** Set `JWT_SECRET_PREVIOUS` to the *current* `JWT_SECRET`, then set `JWT_SECRET`
+1. **Open the window.** Set `JWT_SECRET_PREVIOUS` to the _current_ `JWT_SECRET`, then set `JWT_SECRET`
    to the newly generated secret. Deploy. From now on new tokens are signed with the new secret; tokens
    still in flight verify against `JWT_SECRET_PREVIOUS`.
 2. **Wait out the window.** Leave both in place for **> `ACCESS_TOKEN_EXPIRY`** (a few minutes of margin
@@ -331,7 +334,7 @@ data.
 ### Re-apply erasures after restore (GDPR Art. 17)
 
 **Any restore that rewinds past an account deletion resurrects that user.** A restore rolls the whole
-cluster back to the backup point, so users deleted *after* that point — and their todos and refresh
+cluster back to the backup point, so users deleted _after_ that point — and their todos and refresh
 tokens — come back to life. This is an accepted GDPR posture (backups are "beyond use" and expire on the
 normal ≤35-day cycle) **only if erasures are re-applied before the restored data serves traffic again**.
 Skipping this step turns a routine DR restore into an un-erasure — a reportable breach.

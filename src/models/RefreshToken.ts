@@ -1,10 +1,6 @@
 import prisma from '../lib/prisma.js';
 import { env } from '../config/env.js';
-import {
-  generateRefreshToken,
-  hashRefreshToken,
-  refreshTokenExpiry,
-} from '../lib/tokens.js';
+import { generateRefreshToken, hashRefreshToken, refreshTokenExpiry } from '../lib/tokens.js';
 import type { RefreshTokenServiceInterface } from '../types/index.js';
 
 export const RefreshTokenService: RefreshTokenServiceInterface = {
@@ -80,7 +76,9 @@ export const RefreshTokenService: RefreshTokenServiceInterface = {
   // truncate a real environment.
   async deleteMany() {
     if (env.NODE_ENV !== 'test') {
-      throw new Error('RefreshTokenService.deleteMany is test-only: it deletes every refresh token');
+      throw new Error(
+        'RefreshTokenService.deleteMany is test-only: it deletes every refresh token',
+      );
     }
     return prisma.refreshToken.deleteMany();
   },

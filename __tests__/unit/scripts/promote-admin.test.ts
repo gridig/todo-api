@@ -45,6 +45,8 @@ describe('promote-admin parseArgs', () => {
 
   it('rejects unknown flags and extra positional args', () => {
     expect(() => parseArgs(['a@example.com', '--nope'])).toThrow(/unknown flag/);
-    expect(() => parseArgs(['a@example.com', 'b@example.com'])).toThrow(/unexpected extra argument/);
+    expect(() => parseArgs(['a@example.com', 'b@example.com'])).toThrow(
+      /unexpected extra argument/,
+    );
   });
 });

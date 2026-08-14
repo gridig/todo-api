@@ -28,6 +28,8 @@ From a clean checkout, with Node.js 24+ and PostgreSQL available:
 
    The three roles (`db_admin`, `db_app`, `db_auditor`) are created by `prisma/sql/bootstrap_roles.sql`, which runs automatically the first time the Docker Compose Postgres volume initialises. See [`docs/configuration.md`](docs/configuration.md#database-roles) for the role model.
 
+   > **Note:** `.env.example` ships with `NODE_ENV=development` and dev placeholder keys so the quickstart boots as-is. Production deployments additionally require `METRICS_TOKEN` (32+ chars) and real `ENCRYPTION_*` keys — `NODE_ENV=production` enforces both at startup.
+
 3. **Create database and run migrations**
 
    Start Postgres (Docker Compose mounts `bootstrap_roles.sql` into `/docker-entrypoint-initdb.d/` so a fresh volume provisions the three roles automatically), then apply migrations:
@@ -86,7 +88,7 @@ curl http://localhost:3001/todos \
 │  Middleware pipeline (applied in order):                        │
 │    1 Trust Proxy     2 Helmet          3 Request ID             │
 │    4 Request Context 5 Metrics         6 /echo (benchmark)      │
-│    7 Request Logger  8 CORS            9 /health (unlimited)    │
+│    7 Request Logger  8 CORS            9 /health (ready 60/min) │
 │   10 /metrics (token) 11 Rate Limiter 12 JSON Body Parser       │
 │   13 Route Handlers (per-route auth · validation · limits)      │
 │   14 404 Handler    15 Error Handler                            │
@@ -187,31 +189,31 @@ Key Components:
 
 ### Rate Limits
 
-| Limiter      | Window     | Max Requests      | Applied To        |
-| ------------ | ---------- | ----------------- | ----------------- |
-| **Global**   | 15 minutes | 200               | All routes        |
-| **Register** | 1 hour     | 2                 | Account creation  |
-| **Login**    | 15 minutes | 3 (failures, per IP+email) | Authentication (a per-email 30/hour cap also applies) |
-| **Refresh**  | 1 minute   | 60                | `/auth/refresh`, `/auth/logout*` |
-| **Read**     | 1 minute   | 100               | GET operations    |
-| **Write**    | 1 minute   | 30                | POST/PATCH/DELETE |
+| Limiter      | Window     | Max Requests               | Applied To                                                          |
+| ------------ | ---------- | -------------------------- | ------------------------------------------------------------------- |
+| **Global**   | 15 minutes | 200                        | All routes                                                          |
+| **Register** | 1 hour     | 2                          | Account creation                                                    |
+| **Login**    | 15 minutes | 3 (failures, per IP+email) | Authentication (a per-email 30/hour cap also applies)               |
+| **Refresh**  | 15 minutes | 60                         | `/auth/refresh`, `/auth/logout` (`/auth/logout-all` uses **Write**) |
+| **Read**     | 1 minute   | 100                        | GET operations                                                      |
+| **Write**    | 1 minute   | 30                         | POST/PATCH/DELETE                                                   |
 
 ## Technology Stack
 
 - **TypeScript** 6.0.3 (strict mode, ES Modules)
 - **Node.js** 24+ + **Express** 5.2.1
-- **PostgreSQL** + **Prisma ORM** 7.8.0
+- **PostgreSQL** + **Prisma ORM** 7.9.1
 - **Authentication**: jsonwebtoken 9.0.3, bcrypt 6.0.0
 - **Security Headers**: helmet 8.x
 - **Validation**: joi 18.2.3, envalid 8.2.0
 - **Logging**: pino 10.3.1, pino-pretty 13.1.3
-- **Database Driver**: pg 8.22.0, @prisma/adapter-pg 7.8.0
-- **Rate Limiting**: express-rate-limit 8.5.2, rate-limit-redis 5.x (optional Redis store)
+- **Database Driver**: pg 8.22.0, @prisma/adapter-pg 7.9.1
+- **Rate Limiting**: express-rate-limit 8.6.1, rate-limit-redis 5.x (optional Redis store)
 - **Metrics**: prom-client 15.1.3 (Prometheus-compatible process and application metrics)
 - **CORS**: cors 2.8.6 (origin validation, preflight handling)
 - **IDs**: uuid 14.0.1
-- **Testing**: Jest 30.4.2, Supertest 7.2.2, ts-jest 29.4.11
-- **Development**: tsx 4.23.0 (hot reload via `tsx watch`)
+- **Testing**: Jest 30.4.2, Supertest 7.2.2, ts-jest 29.4.12
+- **Development**: tsx 4.23.1 (hot reload via `tsx watch`)
 
 ## Configuration
 
@@ -224,8 +226,9 @@ All environment variables are validated at startup with `envalid`. The server wi
 | `DATABASE_URL`         | Runtime app connection (use the restricted `db_app` role)                                 | `postgresql://db_app:db_app_dev@localhost:5432/todo_api`     |
 | `DATABASE_MIGRATE_URL` | Admin DSN used only by `prisma migrate deploy` (`db_admin`). Falls back to `DATABASE_URL` | `postgresql://db_admin:db_admin_dev@localhost:5432/todo_api` |
 | `JWT_SECRET`           | JWT signing secret (32+ chars)                                                            | `your-super-secret-jwt-key-min-32-chars`                     |
+| `CORS_ORIGIN`          | Allowed CORS origin(s), comma-separated (or `*`). No default — startup fails without it   | `http://localhost:3000,http://localhost:5173`                |
 
-**Optional**: `PORT`, `NODE_ENV`, `LOG_LEVEL`, `CORS_ORIGIN`, database pool tuning, clustering, and more.
+**Optional**: `PORT`, `NODE_ENV`, `LOG_LEVEL`, database pool tuning, clustering, and more.
 
 See [`docs/configuration.md`](docs/configuration.md) for the full reference including all optional variables, CORS setup, and example `.env` files.
 
@@ -302,32 +305,33 @@ See [`docs/testing.md`](docs/testing.md) for the full guide including test struc
 
 Base URL: `http://localhost:3001` -- full documentation in [`docs/api.md`](docs/api.md).
 
-| Method     | Path                     | Auth  | Description                          |
-| ---------- | ------------------------ | ----- | ------------------------------------ |
-| **POST**   | `/auth/register`         | No    | Create account (returns access + refresh token) |
-| **POST**   | `/auth/login`            | No    | Get access + refresh token           |
-| **POST**   | `/auth/refresh`          | No\*  | Rotate the refresh token, get a new access token |
-| **POST**   | `/auth/logout`           | No\*  | Revoke the presented refresh token   |
-| **POST**   | `/auth/logout-all`       | Yes   | Revoke every refresh token for the user |
-| **GET**    | `/user/me`               | Yes   | Get current profile                  |
-| **PATCH**  | `/user/me`               | Yes   | Update display name                  |
-| **PATCH**  | `/user/me/email`         | Yes   | Change email (requires current password) |
-| **PATCH**  | `/user/me/password`      | Yes   | Change password (revokes all refresh tokens) |
-| **DELETE** | `/user/me`               | Yes   | Delete account (cascade + audit)     |
-| **GET**    | `/user/me/export`        | Yes   | Export profile + todos (JSON)        |
-| **GET**    | `/admin/users`           | Admin | List users (paginated)               |
-| **GET**    | `/admin/users/:id`       | Admin | Get a user                           |
-| **PATCH**  | `/admin/users/:id/role`  | Admin | Change a user's role                 |
-| **DELETE** | `/admin/users/:id`       | Admin | Delete a user (cascade + audit)      |
-| **GET**    | `/todos`                 | Yes   | List todos (paginated)               |
-| **POST**   | `/todos`                 | Yes   | Create todo                          |
-| **GET**    | `/todos/:id`             | Yes   | Get single todo                      |
-| **PATCH**  | `/todos/:id`             | Yes   | Toggle done status                   |
-| **DELETE** | `/todos/:id`             | Yes   | Delete todo                          |
-| **GET**    | `/health`                | No    | Liveness probe                       |
-| **GET**    | `/health/ready`          | No    | Readiness probe                      |
-| **GET**    | `/health/ready/detailed` | Token | Detailed readiness (memory/CPU/pool) |
-| **GET**    | `/metrics`               | Token | Prometheus metrics                   |
+| Method       | Path                     | Auth  | Description                                                                                                                                                                |
+| ------------ | ------------------------ | ----- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **POST**     | `/auth/register`         | No    | Create account (returns access + refresh token)                                                                                                                            |
+| **POST**     | `/auth/login`            | No    | Get access + refresh token                                                                                                                                                 |
+| **POST**     | `/auth/refresh`          | No\*  | Rotate the refresh token, get a new access token                                                                                                                           |
+| **POST**     | `/auth/logout`           | No\*  | Revoke the presented refresh token                                                                                                                                         |
+| **POST**     | `/auth/logout-all`       | Yes   | Revoke every refresh token for the user                                                                                                                                    |
+| **GET**      | `/user/me`               | Yes   | Get current profile                                                                                                                                                        |
+| **PATCH**    | `/user/me`               | Yes   | Update display name                                                                                                                                                        |
+| **PATCH**    | `/user/me/email`         | Yes   | Change email (requires current password)                                                                                                                                   |
+| **PATCH**    | `/user/me/password`      | Yes   | Change password (revokes all refresh tokens)                                                                                                                               |
+| **DELETE**   | `/user/me`               | Yes   | Delete account (cascade + audit)                                                                                                                                           |
+| **GET**      | `/user/me/export`        | Yes   | Export profile + todos (JSON)                                                                                                                                              |
+| **GET**      | `/admin/users`           | Admin | List users (paginated)                                                                                                                                                     |
+| **GET**      | `/admin/users/:id`       | Admin | Get a user                                                                                                                                                                 |
+| **PATCH**    | `/admin/users/:id/role`  | Admin | Change a user's role                                                                                                                                                       |
+| **DELETE**   | `/admin/users/:id`       | Admin | Delete a user (cascade + audit)                                                                                                                                            |
+| **GET**      | `/todos`                 | Yes   | List todos (paginated)                                                                                                                                                     |
+| **POST**     | `/todos`                 | Yes   | Create todo                                                                                                                                                                |
+| **GET**      | `/todos/:id`             | Yes   | Get single todo                                                                                                                                                            |
+| **PATCH**    | `/todos/:id`             | Yes   | Toggle done status                                                                                                                                                         |
+| **DELETE**   | `/todos/:id`             | Yes   | Delete todo                                                                                                                                                                |
+| **GET**      | `/health`                | No    | Liveness probe                                                                                                                                                             |
+| **GET**      | `/health/ready`          | No    | Readiness probe                                                                                                                                                            |
+| **GET**      | `/health/ready/detailed` | Token | Detailed readiness (memory/CPU/pool)                                                                                                                                       |
+| **GET**      | `/metrics`               | Token | Prometheus metrics                                                                                                                                                         |
+| **GET/POST** | `/echo`                  | No    | Benchmark echo — mounted only when `ENABLE_ECHO_ROUTES=true` (default: non-production); bypasses logging and rate limiting. See [`docs/benchmarks.md`](docs/benchmarks.md) |
 
 \* `/auth/refresh` and `/auth/logout` take the refresh token in the body — they don't require a (possibly expired) access token; `/auth/logout-all` requires a valid access token.
 
@@ -397,7 +401,6 @@ todo-api/
 │   └── predeploy.ts           # Pre-deploy orchestration
 ├── docker/
 │   └── timescaledb/           # Custom TimescaleDB + pgBackRest image and backup scripts
-├── logs/                       # Log files (generated)
 ├── dist/                       # Compiled JavaScript (generated)
 ├── tsconfig.json              # TypeScript configuration
 ├── tsconfig.test.json         # TypeScript config for tests
@@ -413,8 +416,6 @@ todo-api/
 │   ├── explain-queries.ts     # EXPLAIN ANALYZE for generated SQL
 │   ├── bcrypt-timing.ts       # Bcrypt hash/compare timing
 │   └── container-startup.sh   # Container startup measurement
-├── plans/                      # Architecture and comparison specs
-│   └── alternatives/          # Fair comparison requirements, greenfield architecture
 ├── docs/
 │   ├── api.md                     # Full API endpoint reference
 │   ├── benchmarks.md              # Benchmark methodology and reproduction

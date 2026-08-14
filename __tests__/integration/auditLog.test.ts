@@ -15,6 +15,7 @@ import {
   disconnectTestDB,
   truncateAuditEntries,
   pollForAuditRow,
+  queryAsAdmin,
 } from '../helpers/testSetup.js';
 
 const app = createTestApp();
@@ -267,33 +268,62 @@ describe('Audit log — tamper-evidence & rollback', () => {
     );
   });
 
+  it('denies db_app UPDATE/DELETE on every TimescaleDB chunk, not just the parent', async () => {
+    // Rows physically live in chunks under _timescaledb_internal. If a chunk
+    // were ever created with a permissive ACL, db_app could tamper via the
+    // chunk while the parent-table REVOKE (and its boot probe) still passed.
+    // Force at least one chunk to exist, then check each one directly.
+    await prisma.auditEntry.create({
+      data: { action: 'chunk.acl.probe', entityType: 'Test', outcome: 'success' },
+    });
+
+    const chunks = await queryAsAdmin<{ chunk_schema: string; chunk_name: string }>(
+      `SELECT chunk_schema, chunk_name FROM timescaledb_information.chunks
+       WHERE hypertable_name = 'audit_entries'`,
+    );
+    expect(chunks.length).toBeGreaterThan(0);
+
+    for (const { chunk_schema, chunk_name } of chunks) {
+      const [priv] = await queryAsAdmin<{ can_update: boolean; can_delete: boolean }>(
+        `SELECT has_table_privilege('db_app', format('%I.%I', $1::text, $2::text), 'UPDATE') AS can_update,
+                has_table_privilege('db_app', format('%I.%I', $1::text, $2::text), 'DELETE') AS can_delete`,
+        [chunk_schema, chunk_name],
+      );
+      expect(priv).toEqual({ can_update: false, can_delete: false });
+    }
+  });
+
   it('rolls back the parent mutation when the audit insert throws', async () => {
     const { userId } = await createTestUser();
     const todo = await TodoService.create({ text: 'Rollback me', userId, done: false });
     await truncateAuditEntries();
 
+    // try/finally, not a trailing mockRestore(): a failed assertion above the
+    // restore would leave auditLog.write permanently rejecting for every
+    // subsequent test in this file.
     const spy = jest
       .spyOn(auditLog, 'write')
       .mockRejectedValue(new Error('simulated audit insert failure'));
+    try {
+      await expect(TodoService.toggleDone({ id: todo.id, userId })).rejects.toThrow(
+        /simulated audit insert failure/,
+      );
 
-    await expect(TodoService.toggleDone({ id: todo.id, userId })).rejects.toThrow(
-      /simulated audit insert failure/,
-    );
+      // The toggle must NOT have flipped — $transaction rolled it back.
+      const after = await prisma.todo.findUnique({ where: { id: todo.id } });
+      expect(after).not.toBeNull();
+      expect(after!.done).toBe(false);
 
-    // The toggle must NOT have flipped — $transaction rolled it back.
-    const after = await prisma.todo.findUnique({ where: { id: todo.id } });
-    expect(after).not.toBeNull();
-    expect(after!.done).toBe(false);
-
-    // And no audit row exists for that toggle.
-    const row = await pollForAuditRow<AuditRow>(
-      `action = $1 AND entity_id = $2`,
-      [AuditAction.TodoUpdate, todo.id],
-      { maxAttempts: 4, intervalMs: 25 },
-    );
-    expect(row).toBeNull();
-
-    spy.mockRestore();
+      // And no audit row exists for that toggle.
+      const row = await pollForAuditRow<AuditRow>(
+        `action = $1 AND entity_id = $2`,
+        [AuditAction.TodoUpdate, todo.id],
+        { maxAttempts: 4, intervalMs: 25 },
+      );
+      expect(row).toBeNull();
+    } finally {
+      spy.mockRestore();
+    }
   });
 });
 

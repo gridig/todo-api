@@ -1,6 +1,6 @@
 # pgBackRest Implementation Guide
 
-Step-by-step instructions for implementing the pgBackRest backup architecture from `docs/databases.md` (§Backup & DR with pgBackRest → Railway Buckets), using the **co-located model**: pgBackRest runs *inside* the TimescaleDB service container, not as a separate sidecar.
+Step-by-step instructions for implementing the pgBackRest backup architecture from `docs/databases.md` (§Backup & DR with pgBackRest → Railway Buckets), using the **co-located model**: pgBackRest runs _inside_ the TimescaleDB service container, not as a separate sidecar.
 
 **Prerequisite**: Step 1 (Railway Bucket provisioning) is complete. You have a Railway Bucket with its S3-compatible endpoint URL, access key ID, and secret.
 
@@ -13,7 +13,7 @@ Step-by-step instructions for implementing the pgBackRest backup architecture fr
 The earlier sidecar design (a standalone pgbackrest service mounting the DB's data volume) cannot run on Railway, and is broken even locally, for two structural reasons:
 
 1. **Railway gives one volume per service and does not share volumes across services.** A sidecar cannot read the DB's `PGDATA` to take a backup, and cannot write into it to restore.
-2. **`archive_command` runs *inside* the Postgres process.** pgBackRest invoked there needs its own `pgbackrest.conf` (S3 endpoint, keys, cipher pass, `pg1-path`) and repo access *in the Postgres container*. A sidecar that holds the only config means every WAL push fails.
+2. **`archive_command` runs _inside_ the Postgres process.** pgBackRest invoked there needs its own `pgbackrest.conf` (S3 endpoint, keys, cipher pass, `pg1-path`) and repo access _in the Postgres container_. A sidecar that holds the only config means every WAL push fails.
 
 `backup`, `archive-push`, and `restore` all need local `PGDATA` + a live Postgres connection + the same repo config. Putting pgBackRest in the same container as Postgres satisfies all three at once, needs no shared volume (the repo is S3), and removes the cross-host version-compatibility problem entirely (there is exactly one pgBackRest install).
 
@@ -95,6 +95,11 @@ ENTRYPOINT ["/usr/local/bin/pgbackrest-entrypoint.sh"]
 
 Writes the config from env vars (S3 in prod, POSIX locally), optionally restores before Postgres starts, launches the scheduler in the background as `postgres`, then hands off to the stock TimescaleDB entrypoint with WAL archiving enabled.
 
+Two hardening behaviors (the snippet below is abridged — the shipped script is authoritative):
+
+- **Missing S3 config fails closed.** If `PGBACKREST_REPO_TYPE=s3` and any of the endpoint/bucket/key/secret/cipher-pass vars are unset, the container **refuses to start** rather than silently running an unbacked-up database (nothing scrapes the backup metrics yet, so a visible refused boot is the only real alert). Set `PGBACKREST_ALLOW_UNCONFIGURED=true` to deliberately boot without backups (emergency / scratch environments only).
+- **The config file is `0600`.** It carries the S3 credentials and the repo cipher passphrase; it is created with `install -m 600` before any secret is written and `chmod 600` re-asserted after the `chown` to `postgres`.
+
 ```bash
 #!/usr/bin/env bash
 set -euo pipefail
@@ -105,6 +110,9 @@ REPO_TYPE="${PGBACKREST_REPO_TYPE:-s3}"
 PG_PATH="${PGDATA:-/var/lib/postgresql/data}"
 
 mkdir -p /etc/pgbackrest /var/log/pgbackrest "${PGBACKREST_REPO_PATH:-/var/lib/pgbackrest}"
+
+# Secrets land in this file — create it 0600 before writing a single one.
+install -m 600 /dev/null "$CONF"
 
 {
   echo "[global]"
@@ -142,6 +150,7 @@ mkdir -p /etc/pgbackrest /var/log/pgbackrest "${PGBACKREST_REPO_PATH:-/var/lib/p
 
 # archive_command runs as the postgres OS user and must be able to read the config.
 chown -R postgres:postgres /etc/pgbackrest /var/log/pgbackrest "${PGBACKREST_REPO_PATH:-/var/lib/pgbackrest}"
+chmod 600 "$CONF"
 
 # Restore mode: populate an (empty/--delta) PGDATA from the repo BEFORE Postgres starts.
 # The stock entrypoint then sees populated data, skips initdb, starts Postgres, and
@@ -171,6 +180,7 @@ exec docker-entrypoint.sh postgres \
 ```
 
 **Notes / known limits:**
+
 - The scheduler is a background child of the postgres entrypoint (PID 1). If it dies, backups stop — surfaced by stale `pgbackrest_*_age_seconds` metrics and the WAL-ok gauge. A process supervisor (s6) is the upgrade path if that proves fragile.
 - During first-boot init, the stock entrypoint briefly runs a temporary server (archiving off) to apply `/docker-entrypoint-initdb.d`. The scheduler tolerates this: `stanza-create` is idempotent and the real gate is `pgbackrest check`, which only passes once the final server with archiving is up.
 
@@ -282,6 +292,7 @@ A one-shot version of `write_metrics` for debugging — run it by hand inside th
 With pgBackRest co-located, `archive_command` resolves correctly: it reads `/etc/pgbackrest/pgbackrest.conf` (written by the entrypoint, owned by `postgres`) and pushes WAL to the same repo the scheduler backs up to.
 
 The archiving flags are passed by the entrypoint (Step 2.2). What they buy:
+
 - `archive_timeout=60` forces a WAL switch every 60s even on a quiet DB — this is what bounds RPO to ~1 minute.
 - `wal_keep_size=256MB` keeps WAL around long enough for archiving to consume it.
 - `wal_level=replica` / `max_wal_senders=3` are archiving prerequisites (replica is already the TimescaleDB default; explicit for safety).
@@ -308,8 +319,8 @@ services:
       PGBACKREST_STANZA: todo-api
       PGBACKREST_REPO_TYPE: posix
       PGBACKREST_REPO_PATH: /var/lib/pgbackrest
-      PGBACKREST_RETENTION_FULL: "2"
-      PGBACKREST_RETENTION_DIFF: "2"
+      PGBACKREST_RETENTION_FULL: '2'
+      PGBACKREST_RETENTION_DIFF: '2'
     ports:
       - '5432:5432'
     volumes:
@@ -379,6 +390,7 @@ pgbackrest --stanza="$STANZA" info 2>&1 || true
 > No `--force`. `--type=full` already forces a full backup; `--force` is only valid on `stanza-create`/`stanza-delete`/`restore` and would error on `backup`.
 
 **Usage** (runs inside the DB service, where the binary, config, and socket live):
+
 ```bash
 railway ssh --service timescaledb "backup-bootstrap.sh"
 ```
@@ -394,9 +406,9 @@ Add to `docs/operations.md`.
 
 ### Recovery Targets
 
-| Metric | Target | Bounded By |
-|--------|--------|------------|
-| RPO    | ≤ 5 minutes  | `archive_timeout = 60s` + WAL push latency |
+| Metric | Target       | Bounded By                                     |
+| ------ | ------------ | ---------------------------------------------- |
+| RPO    | ≤ 5 minutes  | `archive_timeout = 60s` + WAL push latency     |
 | RTO    | ≤ 30 minutes | Provision + restore + WAL replay + app repoint |
 
 > pgBackRest takes **physical** backups of the whole cluster — `pg_authid` (roles + passwords),
@@ -411,8 +423,8 @@ Add to `docs/operations.md`.
    data volume and the same `PGBACKREST_*` env (same bucket, keys, cipher pass, stanza).
 3. **Set restore env** on that service and deploy:
    - `PGBACKREST_RESTORE=1`
-   The entrypoint restores into the empty `PGDATA` before Postgres starts; Postgres then replays
-   WAL to the latest point and promotes.
+     The entrypoint restores into the empty `PGDATA` before Postgres starts; Postgres then replays
+     WAL to the latest point and promotes.
 4. **Verify** (inside the service):
    - `psql -c '\du'` — `db_admin`, `db_app`, `db_auditor` present
    - `psql -c '\dt'` — `users`, `todos`, `audit_entries`, `_prisma_migrations` present
@@ -427,9 +439,10 @@ Add to `docs/operations.md`.
 ### Scenario B: Point-in-Time Recovery (bad migration / data corruption)
 
 Same as Scenario A, but in step 3 also set:
+
 - `PGBACKREST_RESTORE_ARGS=--type=time --target="2026-06-01 12:00:00+00"`
-Add `--target-exclusive` to stop *before* the bad event. Use `--delta` instead of an empty volume
-to restore in place over existing data.
+  Add `--target-exclusive` to stop _before_ the bad event. Use `--delta` instead of an empty volume
+  to restore in place over existing data.
 
 ### Quarterly Restore Drill (SOC 2 A1.3)
 
@@ -445,17 +458,17 @@ to restore in place over existing data.
 
 The scheduler writes `/tmp/pgbackrest-metrics.prom` every loop. There is **no** HTTP listener for it yet — do not expose a port that nothing serves.
 
-**Now:** there is **no interim alert**. Railway has no native log-content alerting — its webhooks fire on *deploy* state, and a backup failure does not change deploy state (the container keeps running), so a deploy webhook never sees it. The scheduler still logs `ERROR: Full backup FAILED!` / `ERROR: Differential backup FAILED!`, but nothing is wired to notify on those lines. Backup-failure alerting is delivered by the Prometheus rules in the **Later** table below, tracked under the **Monitoring & Observability** roadmap item.
+**Now:** there is **no interim alert**. Railway has no native log-content alerting — its webhooks fire on _deploy_ state, and a backup failure does not change deploy state (the container keeps running), so a deploy webhook never sees it. The scheduler still logs `ERROR: Full backup FAILED!` / `ERROR: Differential backup FAILED!`, but nothing is wired to notify on those lines. Backup-failure alerting is delivered by the Prometheus rules in the **Later** table below, tracked under the **Monitoring & Observability** roadmap item.
 
 If pre-Prometheus alerting is ever needed before that lands, the two viable paths (neither implemented) are: a Railway **log drain** forwarding this service's logs to an external service (e.g. Better Stack) that alerts on the `ERROR:` pattern, or a webhook `POST` added to `backup-scheduler.sh`'s failure branch (gated on an alert-URL env var).
 
 **Later (Monitoring & Observability roadmap item):** expose the metrics file via a node_exporter
 `--collector.textfile.directory` mount or a tiny HTTP exporter, then add:
 
-| Alert | Condition | Severity |
-|---|---|---|
-| `pgbackrest_last_full_backup_age_seconds > 108000` | No full in 30h | Critical |
-| `pgbackrest_last_diff_backup_age_seconds > 25200`  | No diff in 7h  | Warning |
+| Alert                                              | Condition                      | Severity |
+| -------------------------------------------------- | ------------------------------ | -------- |
+| `pgbackrest_last_full_backup_age_seconds > 108000` | No full in 30h                 | Critical |
+| `pgbackrest_last_diff_backup_age_seconds > 25200`  | No diff in 7h                  | Warning  |
 | `pgbackrest_wal_archive_ok == 0`                   | Archiving broken — RPO at risk | Critical |
 
 ---
@@ -464,34 +477,34 @@ If pre-Prometheus alerting is ever needed before that lands, the two viable path
 
 **Retention target.** Defaults give a **35-day continuous PITR window** (daily fulls; WAL retained for the oldest retained full): `retention-full=35`, `retention-diff=14`, `retention-archive=35`. This exceeds the `ROADMAP.md` floor (≥30-day retention).
 
-> **Reconcile the 1-year claim.** `docs/databases.md` currently states "Retention: 1 year". A *backup* PITR window of a full year means storing ~365 fulls' worth of WAL — disproportionate at this scale. The 1-year **compliance** requirement is satisfied by the in-DB audit retention (`add_retention_policy('audit_entries', INTERVAL '1 year')`, already shipped) plus, if a 1-year *recoverable copy* is required, a periodic exported full to cold storage. Update `databases.md` to state the 35-day PITR window and the 1-year audit-data retention separately, instead of implying a 1-year backup window.
+> **Reconcile the 1-year claim.** `docs/databases.md` currently states "Retention: 1 year". A _backup_ PITR window of a full year means storing ~365 fulls' worth of WAL — disproportionate at this scale. The 1-year **compliance** requirement is satisfied by the in-DB audit retention (`add_retention_policy('audit_entries', INTERVAL '1 year')`, already shipped) plus, if a 1-year _recoverable copy_ is required, a periodic exported full to cold storage. Update `databases.md` to state the 35-day PITR window and the 1-year audit-data retention separately, instead of implying a 1-year backup window.
 
 Also add an object-lifecycle rule on the Railway Bucket to expire objects past the retention horizon (e.g. 40 days) as a defense-in-depth safety net.
 
 ### Environment variables (on the **timescaledb** service) — for `docs/configuration.md`
 
-| Variable | Default | Description |
-|---|---|---|
-| `PGBACKREST_REPO_TYPE` | `s3` | `s3` (prod) or `posix` (local) |
-| `PGBACKREST_REPO_S3_ENDPOINT` | _(required for s3)_ | Railway Bucket S3 endpoint URL |
-| `PGBACKREST_REPO_S3_BUCKET` | _(required for s3)_ | Bucket name |
-| `PGBACKREST_REPO_S3_KEY` | _(required for s3)_ | Access key ID |
-| `PGBACKREST_REPO_S3_KEY_SECRET` | _(required for s3)_ | Secret access key |
-| `PGBACKREST_REPO_S3_REGION` | `auto` | S3 region |
-| `PGBACKREST_REPO_PATH` | `/var/lib/pgbackrest` | POSIX repo path (local only) |
-| `PGBACKREST_CIPHER_PASS` | _(required)_ | AES-256 passphrase (32+ chars) |
-| `PGBACKREST_STANZA` | `todo-api` | Stanza name |
-| `PGBACKREST_PG1_USER` | `$POSTGRES_USER` or `postgres` | DB role pgBackRest connects as (cluster superuser). Lets root-invoked ops commands work instead of trying a role named after the OS user |
-| `PGBACKREST_RETENTION_FULL` | `35` | Daily full backups to retain (≈ PITR window in days) |
-| `PGBACKREST_RETENTION_DIFF` | `14` | Differentials to retain |
-| `PGBACKREST_RETENTION_ARCHIVE` | `35` | Fulls' worth of WAL to retain |
-| `PGBACKREST_PROCESS_MAX` | `2` | Parallel processes for backup/restore |
-| `PGBACKREST_FULL_HOUR_UTC` | `2` | UTC hour for the daily full window |
-| `PGBACKREST_FULL_MAX_AGE_SEC` | `93600` | Hard catch-up ceiling for the daily full (26h) — run a full regardless of window once the last is this old. Keep below the 30h full-age alert |
-| `PGBACKREST_DIFF_INTERVAL_SEC` | `21600` | Differential interval (seconds) |
-| `PGBACKREST_LOOP_SLEEP_SEC` | `60` | Scheduler check interval (seconds) |
-| `PGBACKREST_RESTORE` | `0` | `1` = restore into PGDATA before Postgres starts (DR only) |
-| `PGBACKREST_RESTORE_ARGS` | _(empty)_ | Extra restore flags, e.g. `--type=time --target=...`, `--delta` |
+| Variable                        | Default                        | Description                                                                                                                                   |
+| ------------------------------- | ------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| `PGBACKREST_REPO_TYPE`          | `s3`                           | `s3` (prod) or `posix` (local)                                                                                                                |
+| `PGBACKREST_REPO_S3_ENDPOINT`   | _(required for s3)_            | Railway Bucket S3 endpoint URL                                                                                                                |
+| `PGBACKREST_REPO_S3_BUCKET`     | _(required for s3)_            | Bucket name                                                                                                                                   |
+| `PGBACKREST_REPO_S3_KEY`        | _(required for s3)_            | Access key ID                                                                                                                                 |
+| `PGBACKREST_REPO_S3_KEY_SECRET` | _(required for s3)_            | Secret access key                                                                                                                             |
+| `PGBACKREST_REPO_S3_REGION`     | `auto`                         | S3 region                                                                                                                                     |
+| `PGBACKREST_REPO_PATH`          | `/var/lib/pgbackrest`          | POSIX repo path (local only)                                                                                                                  |
+| `PGBACKREST_CIPHER_PASS`        | _(required)_                   | AES-256 passphrase (32+ chars)                                                                                                                |
+| `PGBACKREST_STANZA`             | `todo-api`                     | Stanza name                                                                                                                                   |
+| `PGBACKREST_PG1_USER`           | `$POSTGRES_USER` or `postgres` | DB role pgBackRest connects as (cluster superuser). Lets root-invoked ops commands work instead of trying a role named after the OS user      |
+| `PGBACKREST_RETENTION_FULL`     | `35`                           | Daily full backups to retain (≈ PITR window in days)                                                                                          |
+| `PGBACKREST_RETENTION_DIFF`     | `14`                           | Differentials to retain                                                                                                                       |
+| `PGBACKREST_RETENTION_ARCHIVE`  | `35`                           | Fulls' worth of WAL to retain                                                                                                                 |
+| `PGBACKREST_PROCESS_MAX`        | `2`                            | Parallel processes for backup/restore                                                                                                         |
+| `PGBACKREST_FULL_HOUR_UTC`      | `2`                            | UTC hour for the daily full window                                                                                                            |
+| `PGBACKREST_FULL_MAX_AGE_SEC`   | `93600`                        | Hard catch-up ceiling for the daily full (26h) — run a full regardless of window once the last is this old. Keep below the 30h full-age alert |
+| `PGBACKREST_DIFF_INTERVAL_SEC`  | `21600`                        | Differential interval (seconds)                                                                                                               |
+| `PGBACKREST_LOOP_SLEEP_SEC`     | `60`                           | Scheduler check interval (seconds)                                                                                                            |
+| `PGBACKREST_RESTORE`            | `0`                            | `1` = restore into PGDATA before Postgres starts (DR only)                                                                                    |
+| `PGBACKREST_RESTORE_ARGS`       | _(empty)_                      | Extra restore flags, e.g. `--type=time --target=...`, `--delta`                                                                               |
 
 ---
 
@@ -508,24 +521,26 @@ Validate the single image builds (config validation happens at `stanza-create` r
 
 ## Step 11: Documentation Updates
 
-| File | What to change |
-|---|---|
-| `docs/operations.md` | Add the restore runbook (Step 7) |
-| `docs/databases.md` | Topology diagram → pgBackRest **co-located** in the timescaledb container (not a sidecar); retention → 35-day PITR window; separate the 1-year **audit-data** retention from backup retention |
-| `docs/configuration.md` | Add the env-var table (Step 9) under the timescaledb service |
-| `docs/docker.md` | Document the `docker/timescaledb/` image (Postgres + pgBackRest + scheduler) |
-| `ROADMAP.md` | Check off the Backup & DR subtasks; reword the `pg_dump`-to-object-storage bullet to reflect the chosen tool (pgBackRest + WAL/PITR), so the SOC 2 change-management artifact matches reality |
+| File                    | What to change                                                                                                                                                                                |
+| ----------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `docs/operations.md`    | Add the restore runbook (Step 7)                                                                                                                                                              |
+| `docs/databases.md`     | Topology diagram → pgBackRest **co-located** in the timescaledb container (not a sidecar); retention → 35-day PITR window; separate the 1-year **audit-data** retention from backup retention |
+| `docs/configuration.md` | Add the env-var table (Step 9) under the timescaledb service                                                                                                                                  |
+| `docs/docker.md`        | Document the `docker/timescaledb/` image (Postgres + pgBackRest + scheduler)                                                                                                                  |
+| `ROADMAP.md`            | Check off the Backup & DR subtasks; reword the `pg_dump`-to-object-storage bullet to reflect the chosen tool (pgBackRest + WAL/PITR), so the SOC 2 change-management artifact matches reality |
 
 ---
 
 ## Step 12: Deploy & Verify
 
 ### Order
+
 1. Deploy the new **timescaledb** image with `PGBACKREST_*` env set.
 2. Run the bootstrap: `railway ssh --service timescaledb "backup-bootstrap.sh"`.
 3. Confirm archiving: `railway ssh --service timescaledb "pgbackrest --stanza=todo-api check"`.
 
 ### Pre-deploy checklist
+
 - [ ] Railway Bucket provisioned; credentials valid
 - [ ] timescaledb image builds (CI green)
 - [ ] `SHOW shared_preload_libraries;` includes `timescaledb`
@@ -534,10 +549,13 @@ Validate the single image builds (config validation happens at `stanza-create` r
 - [ ] `pgbackrest check` passes
 
 ### Post-deploy checklist
+
 - [ ] Differential runs on schedule (wait 6h)
 - [ ] `pgbackrest verify` passes
 - [ ] Metrics file written at `/tmp/pgbackrest-metrics.prom`
 - [ ] No `ERROR:` lines after 24h
 - [ ] **Restore drill within 1 week**: Scenario A into a throwaway service, `pnpm test:integration` green, timings documented
+
 ```
 
+```

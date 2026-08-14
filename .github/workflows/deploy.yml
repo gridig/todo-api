@@ -1,7 +1,12 @@
 name: Deploy
 
 on:
-  push:
+  # Staging deploys trigger only after the CI workflow succeeds on main — a
+  # red-CI commit can never ship automatically. (branches filters on the CI
+  # run's head branch, so PR-triggered CI runs never match.)
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
     branches: [main]
   workflow_dispatch:
     inputs:
@@ -10,7 +15,9 @@ on:
         required: true
         type: choice
         options: [staging, production]
-        default: production
+        # Staging, matching deploy-db.yml — production must be an explicit,
+        # deliberate selection (it is also reviewer-gated by the environment).
+        default: staging
 
 concurrency:
   group: deploy-${{ inputs.environment || 'staging' }}
@@ -21,13 +28,20 @@ permissions:
 
 jobs:
   deploy:
+    # workflow_run fires on CI failure too — only a green run may deploy.
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     environment: ${{ inputs.environment || 'staging' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Deploy exactly the commit CI validated, not whatever main has moved to.
+          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.ref }}
 
       - name: Install Railway CLI
-        run: npm install -g @railway/cli
+        # Pinned: this CLI runs with RAILWAY_TOKEN in env — an unreviewed
+        # latest-version fetch on every deploy is a supply-chain hole.
+        run: npm install -g @railway/cli@5.41.1
 
       - name: Deploy to Railway
         run: railway up --ci --service todo-api

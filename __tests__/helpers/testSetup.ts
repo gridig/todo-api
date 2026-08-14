@@ -28,6 +28,17 @@ export async function truncateAuditEntries(): Promise<void> {
   await getAdminPool().query('TRUNCATE audit_entries RESTART IDENTITY CASCADE');
 }
 
+// Run an arbitrary query on the privileged (db_admin) pool — for assertions
+// that need catalog access the runtime db_app role doesn't have (e.g. the
+// TimescaleDB chunk-ACL check in auditLog.test.ts).
+export async function queryAsAdmin<T extends QueryResultRow>(
+  sql: string,
+  params: unknown[] = [],
+): Promise<T[]> {
+  const res = await getAdminPool().query<T>(sql, params);
+  return res.rows;
+}
+
 // Poll for an audit row matching the predicate. Necessary because audit writes
 // from auth/route handlers are fire-and-forget (`void writeOrLog(...)`), so the
 // row may not be visible the instant the HTTP response returns to the test.

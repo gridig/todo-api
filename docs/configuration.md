@@ -15,14 +15,15 @@ The application uses `envalid` to validate all environment variables at startup,
 
 ## Required Variables
 
-| Variable                     | Type   | Description                                                                                                                                                                                             | Example                                                      |
-| ---------------------------- | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------ |
-| `DATABASE_URL`               | URL    | PostgreSQL connection string for the runtime app role (`db_app`). The audit-log REVOKE depends on this not being a superuser.                                                                           | `postgresql://db_app:db_app_dev@localhost:5432/todo_api`     |
-| `DATABASE_MIGRATE_URL`       | URL    | Optional admin DSN used **only** by `prisma migrate deploy` (`db_admin` — owns the schema, runs DDL + GRANT/REVOKE). Falls back to `DATABASE_URL` if unset.                                             | `postgresql://db_admin:db_admin_dev@localhost:5432/todo_api` |
-| `JWT_SECRET`                 | String | Secret key for JWT tokens. **Minimum 32 characters** — the server fails fast at startup if this is shorter.                                                                                             | `your-super-secret-jwt-key-min-32-chars`                     |
-| `ENCRYPTION_KEYRING`         | String | Comma-separated `<keyId>:<base64-32-byte-key>` entries for field encryption. New writes use `ENCRYPTION_ACTIVE_KEY_ID`; keep retired keys here until re-encryption drains them. Malformed → boot fails. | `k1:BASE64_32_BYTE_KEY,k2:BASE64_32_BYTE_KEY`                |
-| `ENCRYPTION_ACTIVE_KEY_ID`   | String | keyId (must exist in `ENCRYPTION_KEYRING`) used to encrypt new values.                                                                                                                                  | `k1`                                                         |
-| `ENCRYPTION_BLIND_INDEX_KEY` | String | base64-encoded 32-byte HMAC key for the email blind index (lookup/uniqueness). Rotating it requires re-hashing every row — see [operations.md](operations.md).                                          | `BASE64_32_BYTE_KEY`                                         |
+| Variable                     | Type   | Description                                                                                                                                                                                                     | Example                                                      |
+| ---------------------------- | ------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------ |
+| `DATABASE_URL`               | URL    | PostgreSQL connection string for the runtime app role (`db_app`). The audit-log REVOKE depends on this not being a superuser.                                                                                   | `postgresql://db_app:db_app_dev@localhost:5432/todo_api`     |
+| `DATABASE_MIGRATE_URL`       | URL    | Optional admin DSN used **only** by `prisma migrate deploy` (`db_admin` — owns the schema, runs DDL + GRANT/REVOKE). Falls back to `DATABASE_URL` if unset.                                                     | `postgresql://db_admin:db_admin_dev@localhost:5432/todo_api` |
+| `JWT_SECRET`                 | String | Secret key for JWT tokens. **Minimum 32 characters** — the server fails fast at startup if this is shorter.                                                                                                     | `your-super-secret-jwt-key-min-32-chars`                     |
+| `ENCRYPTION_KEYRING`         | String | Comma-separated `<keyId>:<base64-32-byte-key>` entries for field encryption. New writes use `ENCRYPTION_ACTIVE_KEY_ID`; keep retired keys here until re-encryption drains them. Malformed → boot fails.         | `k1:BASE64_32_BYTE_KEY,k2:BASE64_32_BYTE_KEY`                |
+| `ENCRYPTION_ACTIVE_KEY_ID`   | String | keyId (must exist in `ENCRYPTION_KEYRING`) used to encrypt new values.                                                                                                                                          | `k1`                                                         |
+| `ENCRYPTION_BLIND_INDEX_KEY` | String | base64-encoded 32-byte HMAC key for the email blind index (lookup/uniqueness). Rotating it requires re-hashing every row — see [operations.md](operations.md).                                                  | `BASE64_32_BYTE_KEY`                                         |
+| `CORS_ORIGIN`                | String | Allowed CORS origin(s): comma-separated exact origins, or `*` to disable origin restriction. **No default** — the app fails fast at startup on a missing CORS policy rather than silently allowing all origins. | `https://app.example.com,https://admin.example.com`          |
 
 ### Database roles
 
@@ -109,15 +110,15 @@ committed: `.env*` is gitignored (only `.env.example` / `.env.test` placeholders
 
 **Inventory of secrets and who may read them.**
 
-| Secret                                                            | Store                        | Who can read                                                        |
-| ----------------------------------------------------------------- | ---------------------------- | ------------------------------------------------------------------ |
-| `JWT_SECRET` (+ `JWT_SECRET_PREVIOUS` during rotation)            | Railway per-env variable     | The running app service; project members with Railway secret access |
-| `DATABASE_URL` / `DATABASE_MIGRATE_URL`                           | Railway managed reference    | The app / migration step; project members with Railway access       |
-| `ENCRYPTION_KEYRING`, `ENCRYPTION_ACTIVE_KEY_ID`, `..._BLIND_INDEX_KEY` | Railway per-env variable | The running app service; project members with Railway secret access |
-| `METRICS_TOKEN`                                                   | Railway per-env variable     | The app; operators scraping `/metrics`                              |
-| `PGBACKREST_CIPHER_PASS` + S3 keys                               | Railway (timescaledb service) | The DB container; project members with Railway access               |
-| `RAILWAY_TOKEN` (staging / production)                            | GitHub Environment secret    | The deploy workflow only; production gated by required reviewer      |
-| `CODECOV_TOKEN`                                                   | GitHub Actions secret        | CI only                                                             |
+| Secret                                                                  | Store                         | Who can read                                                        |
+| ----------------------------------------------------------------------- | ----------------------------- | ------------------------------------------------------------------- |
+| `JWT_SECRET` (+ `JWT_SECRET_PREVIOUS` during rotation)                  | Railway per-env variable      | The running app service; project members with Railway secret access |
+| `DATABASE_URL` / `DATABASE_MIGRATE_URL`                                 | Railway managed reference     | The app / migration step; project members with Railway access       |
+| `ENCRYPTION_KEYRING`, `ENCRYPTION_ACTIVE_KEY_ID`, `..._BLIND_INDEX_KEY` | Railway per-env variable      | The running app service; project members with Railway secret access |
+| `METRICS_TOKEN`                                                         | Railway per-env variable      | The app; operators scraping `/metrics`                              |
+| `PGBACKREST_CIPHER_PASS` + S3 keys                                      | Railway (timescaledb service) | The DB container; project members with Railway access               |
+| `RAILWAY_TOKEN` (staging / production)                                  | GitHub Environment secret     | The deploy workflow only; production gated by required reviewer     |
+| `CODECOV_TOKEN`                                                         | GitHub Actions secret         | CI only                                                             |
 
 **Least privilege.** Application code connects as the restricted `db_app` role (no
 UPDATE/DELETE/TRUNCATE on `audit_entries`); only the `db_admin` role used by `prisma migrate deploy`
@@ -147,13 +148,13 @@ Review the member list and key access **quarterly** alongside the restore-drill 
 
 ### Authentication
 
-| Variable                    | Type   | Default            | Description                                                                                                                                                              |
-| --------------------------- | ------ | ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `JWT_ISSUER`                | String | `todo-api`         | JWT `iss` claim. Set the same value on the sign and verify sides.                                                                                                       |
+| Variable                    | Type   | Default            | Description                                                                                                                                                                                                                                                                       |
+| --------------------------- | ------ | ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `JWT_ISSUER`                | String | `todo-api`         | JWT `iss` claim. Set the same value on the sign and verify sides.                                                                                                                                                                                                                 |
 | `JWT_SECRET_PREVIOUS`       | String | _(unset)_          | Previous signing secret, accepted on **verify only** during a rotation window so in-flight tokens survive the cutover. **Minimum 32 chars** when set. Clear it after `ACCESS_TOKEN_EXPIRY` elapses. See [operations.md → JWT secret rotation](operations.md#jwt-secret-rotation). |
-| `JWT_AUDIENCE`              | String | `todo-api-clients` | JWT `aud` claim. Set the same value on the sign and verify sides.                                                                                                       |
-| `ACCESS_TOKEN_EXPIRY`       | String | `15m`              | Access-token lifetime (`jsonwebtoken` `expiresIn`, e.g. `15m`, `1h`). Kept short because stateless JWTs cannot be individually revoked — refresh tokens cover sessions. |
-| `REFRESH_TOKEN_EXPIRY_DAYS` | Number | `30`               | Refresh-token lifetime in days. Refresh tokens rotate on every `POST /auth/refresh`; this absolute cap bounds a stolen-but-unused token.                                |
+| `JWT_AUDIENCE`              | String | `todo-api-clients` | JWT `aud` claim. Set the same value on the sign and verify sides.                                                                                                                                                                                                                 |
+| `ACCESS_TOKEN_EXPIRY`       | String | `15m`              | Access-token lifetime (`jsonwebtoken` `expiresIn`, e.g. `15m`, `1h`). Kept short because stateless JWTs cannot be individually revoked — refresh tokens cover sessions.                                                                                                           |
+| `REFRESH_TOKEN_EXPIRY_DAYS` | Number | `30`               | Refresh-token lifetime in days. Refresh tokens rotate on every `POST /auth/refresh`; this absolute cap bounds a stolen-but-unused token.                                                                                                                                          |
 
 ### Logging
 
@@ -283,23 +284,25 @@ When clustering is enabled, each worker maintains its own database connection po
 node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 ```
 
-Store the value in your secrets manager (see `#7.5` in `ROADMAP.md`) and inject it into the runtime — never commit it to `.env`.
+Store the value in your secrets manager (see the **Secrets Management** section of [`ROADMAP.md`](../ROADMAP.md)) and inject it into the runtime — never commit it to `.env`.
 
 ### Rate Limiting
 
-| Variable             | Type    | Default | Description                                                                                                                                                 |
-| -------------------- | ------- | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `DISABLE_RATE_LIMIT` | Boolean | `false` | Disables all rate limiters. Use when running load tests/benchmarks. **Refused in production** — startup aborts if this is `true` and `NODE_ENV=production`. |
+| Variable                                | Type    | Default | Description                                                                                                                                                                                                                   |
+| --------------------------------------- | ------- | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `DISABLE_RATE_LIMIT`                    | Boolean | `false` | Disables all rate limiters. Use when running load tests/benchmarks. In production, must be paired with `DISABLE_RATE_LIMIT_PRODUCTION_CONFIRM=true` — startup aborts otherwise; with both set, startup logs a loud `WARNING`. |
+| `DISABLE_RATE_LIMIT_PRODUCTION_CONFIRM` | Boolean | `false` | Confirmation flag required to set `DISABLE_RATE_LIMIT=true` in production. Both must be `true`; either alone fails startup. Intended only for dedicated benchmark processes that serve no real traffic.                       |
 
-All rate limiters (`auth`, `write`, `read`, `global`, `register`, `health`) emit the IETF `draft-7` `RateLimit-*` response headers (`RateLimit-Limit`, `RateLimit-Remaining`, `RateLimit-Reset`, and `Retry-After` on 429s). Legacy `X-RateLimit-*` headers are not emitted.
+All rate limiters (`auth`, `login-email`, `write`, `read`, `global`, `register`, `health`, `refresh`) emit the IETF `draft-7` `RateLimit-*` response headers (`RateLimit-Limit`, `RateLimit-Remaining`, `RateLimit-Reset`, and `Retry-After` on 429s). Legacy `X-RateLimit-*` headers are not emitted.
 
 The `/health/ready` endpoint is rate-limited at **60 requests/minute/IP** (`healthLimiter`). This is generous enough for typical ALB/K8s probes (5–30s intervals) but blocks abuse of the `SELECT 1` round-trip against the database.
 
 ### Debug & Benchmark Routes
 
-| Variable             | Type    | Default                             | Description                                                                                                                                                                                                                                                                                                                                                            |
-| -------------------- | ------- | ----------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `ENABLE_ECHO_ROUTES` | Boolean | `true` in non-prod, `false` in prod | Mount the `/echo` benchmark routes. `/echo` bypasses logging and rate limiting. JSON body parsing now honors `BODY_LIMIT` (was: 100kb library default). The default mirrors `NODE_ENV` so production processes hide it unless this flag is explicitly set. If set true in production, startup logs a loud `WARNING` — intended only for dedicated benchmark processes. |
+| Variable                                | Type    | Default                             | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| --------------------------------------- | ------- | ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `ENABLE_ECHO_ROUTES`                    | Boolean | `true` in non-prod, `false` in prod | Mount the `/echo` benchmark routes. `/echo` bypasses logging and rate limiting. JSON body parsing now honors `BODY_LIMIT` (was: 100kb library default). The default mirrors `NODE_ENV` so production processes hide it unless this flag is explicitly set. Setting it `true` in production **aborts startup** unless paired with `ENABLE_ECHO_ROUTES_PRODUCTION_CONFIRM=true`; with both set, startup logs a loud `WARNING` — intended only for dedicated benchmark processes. |
+| `ENABLE_ECHO_ROUTES_PRODUCTION_CONFIRM` | Boolean | `false`                             | Confirmation flag required to enable `ENABLE_ECHO_ROUTES` in production. Both must be `true`; either alone fails startup. Intended only for dedicated benchmark processes that serve no real traffic.                                                                                                                                                                                                                                                                          |
 
 See [benchmarks.md → Rate Limiting](benchmarks.md#rate-limiting) for the flag combination required when benchmarking against a production-mode process.
 
@@ -323,14 +326,14 @@ The API supports Cross-Origin Resource Sharing (CORS) to allow frontend applicat
 
 ### Variables
 
-| Variable               | Type    | Default                          | Description                                                                                                                                                                                                                 |
-| ---------------------- | ------- | -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `CORS_ORIGIN`          | String  | `*`                              | Comma-separated list of allowed origins. Use `*` to allow any origin.                                                                                                                                                       |
-| `CORS_CREDENTIALS`     | String  | `false`                          | Set to `true` to allow cookies and authorization headers.                                                                                                                                                                   |
-| `CORS_METHODS`         | String  | `GET,HEAD,PUT,PATCH,POST,DELETE` | HTTP methods allowed in CORS requests.                                                                                                                                                                                      |
-| `CORS_HEADERS`         | String  | `Content-Type,Authorization`     | HTTP headers allowed in CORS requests.                                                                                                                                                                                      |
-| `CORS_MAX_AGE`         | String  | `86400`                          | How long preflight request results are cached (in seconds).                                                                                                                                                                 |
-| `CORS_ALLOW_NO_ORIGIN` | Boolean | `true`                           | Whether to accept requests without an `Origin` header (server-to-server, mobile apps, `curl`, Postman). Set to `false` in browser-only deployments to require an explicit, allow-listed origin. No-op when `CORS_ORIGIN=*`. |
+| Variable               | Type    | Default                      | Description                                                                                                                                                                                                                 |
+| ---------------------- | ------- | ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `CORS_ORIGIN`          | String  | _(required — no default)_    | Comma-separated list of allowed origins. Use `*` to allow any origin. See [Required Variables](#required-variables).                                                                                                        |
+| `CORS_CREDENTIALS`     | String  | `false`                      | Set to `true` to allow cookies and authorization headers.                                                                                                                                                                   |
+| `CORS_METHODS`         | String  | `GET,HEAD,POST,PATCH,DELETE` | HTTP methods allowed in CORS requests.                                                                                                                                                                                      |
+| `CORS_HEADERS`         | String  | `Content-Type,Authorization` | HTTP headers allowed in CORS requests.                                                                                                                                                                                      |
+| `CORS_MAX_AGE`         | String  | `86400`                      | How long preflight request results are cached (in seconds).                                                                                                                                                                 |
+| `CORS_ALLOW_NO_ORIGIN` | Boolean | `true`                       | Whether to accept requests without an `Origin` header (server-to-server, mobile apps, `curl`, Postman). Set to `false` in browser-only deployments to require an explicit, allow-listed origin. No-op when `CORS_ORIGIN=*`. |
 
 ### Example Configurations
 
@@ -419,7 +422,7 @@ BODY_LIMIT=16kb
 # CORS
 CORS_ORIGIN=http://localhost:3000,http://localhost:5173
 CORS_CREDENTIALS=false
-CORS_METHODS=GET,HEAD,PUT,PATCH,POST,DELETE
+CORS_METHODS=GET,HEAD,POST,PATCH,DELETE
 CORS_HEADERS=Content-Type,Authorization
 CORS_MAX_AGE=86400
 CORS_ALLOW_NO_ORIGIN=true

@@ -64,7 +64,10 @@ export const createOriginValidator = (
     if (allowedOrigins.includes(origin)) {
       callback(null, true);
     } else {
-      callback(new ForbiddenError('Origin not allowed by CORS policy', 'CORS_ORIGIN_DENIED'), false);
+      callback(
+        new ForbiddenError('Origin not allowed by CORS policy', 'CORS_ORIGIN_DENIED'),
+        false,
+      );
     }
   };
 };

@@ -3,6 +3,8 @@ name: Dependabot auto-merge
 # Policy: auto-merge patch + minor bumps for npm and github-actions ecosystems
 # once CI is green. Majors and the docker ecosystem (Node base image) stay
 # manual — Node majors break things (e.g. Corepack unbundled in node:26-slim).
+# Security-advisory PRs (alert-state non-empty) also stay manual regardless of
+# bump type, per AGENTS.md — a human reviews anything driven by a CVE.
 
 on: pull_request
 
@@ -24,7 +26,8 @@ jobs:
           (steps.meta.outputs.package-ecosystem == 'npm_and_yarn' ||
            steps.meta.outputs.package-ecosystem == 'github_actions') &&
           (steps.meta.outputs.update-type == 'version-update:semver-patch' ||
-           steps.meta.outputs.update-type == 'version-update:semver-minor')
+           steps.meta.outputs.update-type == 'version-update:semver-minor') &&
+          steps.meta.outputs.alert-state == ''
         run: |
           gh pr review --approve "$PR_URL"
           gh pr merge --auto --squash "$PR_URL"

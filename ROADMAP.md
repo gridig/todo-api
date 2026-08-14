@@ -107,7 +107,7 @@ POST endpoints that create resources (`POST /todos`, `POST /auth/register`) have
 **Effort**: Medium
 **Impact**: High
 
-The Redis store factory is implemented in `middleware/rateLimiter.ts` with graceful in-memory fallback, `REDIS_URL` env var is configured, all five rate limiters use the shared store, and Redis disconnect is wired into graceful shutdown. The remaining work is integration tests. Note: `REDIS_URL` is still commented out in the `app` service env in `docker-compose.yml`, so the compose app does not yet exercise Redis.
+The Redis store factory is implemented in `middleware/rateLimiter.ts` with graceful in-memory fallback, `REDIS_URL` env var is configured, all eight rate limiters use the shared store, and Redis disconnect is wired into graceful shutdown. The remaining work is integration tests. Note: `REDIS_URL` is still commented out in the `app` service env in `docker-compose.yml`, so the compose app does not yet exercise Redis.
 
 - [ ] Add integration tests for shared rate limit counting
 
@@ -222,7 +222,7 @@ Single `DATABASE_URL` connects to one PostgreSQL instance for all operations. As
 Core migration is complete (`@db.Uuid` on PK/FK fields, `20260313101015_uuid_native` migration in place, indexes rebuilt). Only the verification work remains.
 
 - [ ] Review raw SQL in `toggleDone`/`update`/`delete` (`models/Todo.ts`) — parameterized `${id}` binds work against `uuid` columns via the pg adapter; confirm under integration tests
-- [ ] Review `isValidUUID` regex in `routes/todos.ts` — still string-based; harmless but redundant now that the param is validated via Joi `.uuid()` in `schemas.paramsSchema`
+- [x] Review `isValidUUID` regex in `routes/todos.ts` — done: the string-based regex is gone; route params are validated via Joi `.uuid()` in `schemas.paramsSchema` (`validateParams`)
 - [ ] Run benchmarks before/after to measure index size and query latency improvement
 - [ ] Update tests
 
@@ -269,7 +269,7 @@ Startup resilience (decorrelated-jitter retry in `lib/dbConnect.ts`) and runtime
 
 ### Zero-Downtime Migration Strategy
 
-Multiple roadmap items require database schema migrations: **User Profile Management** (User `name` field), **JWT Refresh + Token Revocation** (RefreshToken model), **Role-Based Access Control** (User `role` field). Once the API is serving live traffic, each of these needs a migration plan that avoids downtime. Document a standard approach (e.g., expand-contract pattern, Prisma `migrate deploy` in a pre-deploy step, backward-compatible column additions) before the first post-launch migration.
+The roadmap items that required database schema migrations — **User Profile Management** (User `name` field), **JWT Refresh + Token Revocation** (RefreshToken model), **Role-Based Access Control** (User `role` field) — have all shipped. Once the API is serving live traffic, any future schema change still needs a migration plan that avoids downtime. Document a standard approach (e.g., expand-contract pattern, Prisma `migrate deploy` in a pre-deploy step, backward-compatible column additions) before the first post-launch migration.
 
 ### PII in Request/Response Logs
 

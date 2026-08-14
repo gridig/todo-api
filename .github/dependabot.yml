@@ -38,3 +38,14 @@ updates:
       interval: weekly
       day: monday
     open-pull-requests-limit: 5
+
+  # The DB image's digest pin (timescale/timescaledb) lives in its own
+  # directory — the docker ecosystem is not recursive, so without this entry
+  # that base image gets no CVE bump PRs at all. Bumps stay manual per
+  # AGENTS.md (docker is excluded from auto-merge).
+  - package-ecosystem: docker
+    directory: /docker/timescaledb
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
