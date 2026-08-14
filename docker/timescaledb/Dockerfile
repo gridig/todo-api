@@ -3,7 +3,7 @@
 # lockstep with the CI service image in .github/workflows/ci.yml.
 # pgBackRest is installed once here and is the only pgBackRest in the system, so
 # archive-push / backup / restore can never drift across versions.
-FROM timescale/timescaledb:2.27.1-pg16@sha256:87f39af0a38cb42e4add367d9dfad2087a53fe5c9b24b5bc0dc66bd204b0665f
+FROM timescale/timescaledb:2.29.1-pg16@sha256:252a443e2936039b83dd8da1373d01e59e932d1054fa6adf1bc061f1d56ae60a
 
 USER root
 
