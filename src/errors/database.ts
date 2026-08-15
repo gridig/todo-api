@@ -43,6 +43,13 @@ export function classifyPrismaError(err: unknown): AppError | null {
     case 'P2024':
       return new DatabaseUnavailableError('Database connection pool exhausted', 5);
 
+    // Write conflict / deadlock inside an interactive transaction. Transient by
+    // definition — every $transaction in the codebase can hit it under
+    // contention, and a 500 would tell the client not to retry something that
+    // succeeds on the next attempt.
+    case 'P2034':
+      return new DatabaseUnavailableError('Transaction conflict, please retry', 5);
+
     // FK constraint — conflict (409).
     case 'P2003':
       return new ConflictError('Foreign key constraint failed', 'FOREIGN_KEY_CONSTRAINT');

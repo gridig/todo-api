@@ -54,7 +54,7 @@ __tests__/
 │   ├── routes-smoke.test.ts        # Route smoke tests
 │   ├── todos.test.ts               # Todo endpoint integration tests
 │   ├── admin/                      # /admin surface: authorization, list-users,
-│   │                               #   update-role, delete-user
+│   │                               #   get-user, update-role, delete-user
 │   ├── auth/                       # refresh, logout, logout-all
 │   ├── todos/                      # Per-endpoint CRUD: create, delete,
 │   │                               #   get-single, get-all, update
@@ -63,13 +63,14 @@ __tests__/
 └── unit/
     ├── migrations-guard.test.ts    # Blocks migrations touching audit_entries
     ├── schema-cascade-guard.test.ts # Guards FK cascade declarations in the schema
-    ├── config/                     # env-production assertions
+    ├── config/                     # env-production assertions, cross-field env invariants
     ├── lib/                        # dbConnect, fieldCrypto, retry, tokens
     ├── middleware/                 # auth, cors-helpers, errorHandler, metricsAuth,
+    │                               #   metricsAuthDisabled, loggerRedaction,
     │                               #   rateLimiter (+ Redis store/fallback),
     │                               #   requestId, requestLogger, validation
     ├── models/                     # Todo, User, deleteMany-guard
-    ├── routes/                     # auth-helpers
+    ├── routes/                     # auth-helpers, limiter-wiring
     └── scripts/                    # preflight-roles, promote-admin
 ```
 

@@ -39,6 +39,12 @@ interface AuditRow {
 
 beforeAll(async () => {
   await connectTestDB();
+  // cleanupTestData() doesn't touch audit_entries and only some suites truncate
+  // it, so rows from an earlier suite survive into this one. The polls below
+  // match on (action, outcome) and take the newest row, so a stale row can
+  // satisfy a poll before this suite's fire-and-forget write lands — and the
+  // entity/actor assertions then fail against the wrong user.
+  await truncateAuditEntries();
 });
 
 afterEach(async () => {
@@ -55,7 +61,7 @@ describe('Audit log — auth emissions', () => {
   it('emits AuthRegister on successful registration with entity + actor', async () => {
     const email = `audit-reg-${Date.now()}@example.com`;
     const res = await request(app).post('/auth/register').send({ email, password: 'TestPass123!' });
-    expect(res.status).toBe(201);
+    expect(res.status).toBe(202);
 
     const row = await pollForAuditRow<AuditRow>(`action = $1 AND outcome = $2`, [
       AuditAction.AuthRegister,
@@ -73,7 +79,9 @@ describe('Audit log — auth emissions', () => {
 
   it('emits AuthLogin success with changedBy populated', async () => {
     const email = `audit-login-${Date.now()}@example.com`;
-    await UserService.create({ email, password: 'TestPass123!' });
+    const created = await UserService.create({ email, password: 'TestPass123!' });
+    // Login is gated on verification; this test is about the audit row.
+    await UserService.markEmailVerified(created.id);
 
     const res = await request(app).post('/auth/login').send({ email, password: 'TestPass123!' });
     expect(res.status).toBe(200);

@@ -183,7 +183,7 @@ Key Components:
 
 ### Authentication Requirements
 
-- **Email**: Valid format, max 72 characters
+- **Email**: Valid format, max 254 characters (RFC 5321 ceiling). Must be verified before login — registration sends a single-use link and returns no tokens
 - **Password**: 8-72 characters, must contain uppercase, lowercase, number, and special character
 - **Tokens**: Short-lived access JWTs (`ACCESS_TOKEN_EXPIRY`, default 15m, HS256) + opaque rotating refresh tokens (`REFRESH_TOKEN_EXPIRY_DAYS`, default 30). `/auth/refresh` rotates the pair; `/auth/logout` and `/auth/logout-all` revoke
 
@@ -194,9 +194,12 @@ Key Components:
 | **Global**   | 15 minutes | 200                        | All routes                                                          |
 | **Register** | 1 hour     | 2                          | Account creation                                                    |
 | **Login**    | 15 minutes | 3 (failures, per IP+email) | Authentication (a per-email 30/hour cap also applies)               |
+| **Login/IP** | 15 minutes | 60 (failures, per IP)      | Authentication, across all accounts from one source                 |
 | **Refresh**  | 15 minutes | 60                         | `/auth/refresh`, `/auth/logout` (`/auth/logout-all` uses **Write**) |
 | **Read**     | 1 minute   | 100                        | GET operations                                                      |
 | **Write**    | 1 minute   | 30                         | POST/PATCH/DELETE                                                   |
+| **Health**   | 1 minute   | 60                         | `/health/ready` (liveness `/health` is unlimited)                   |
+| **Export**   | 1 hour     | 5 (per user)               | `/user/me/export`                                                   |
 
 ## Technology Stack
 

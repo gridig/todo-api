@@ -12,9 +12,9 @@ This document outlines the infrastructure and production-readiness work required
 **Effort**: Medium
 **Impact**: Medium
 
-> **Vendor dependency:** This item commits to Loops.so as the email provider. Evaluate Loops.so's pricing, SLAs, and API stability before starting. Consider defining an email service interface (`lib/emailService.ts`) so the provider can be swapped without touching route handlers.
+> **Vendor dependency:** This item commits to Resend as the email provider. Evaluate Resend's pricing, SLAs, and API stability before starting. Consider defining an email service interface (`lib/emailService.ts`) so the provider can be swapped without touching route handlers.
 
-- [ ] Integrate email service (Loops.so)
+- [ ] Integrate email service (Resend)
 - [ ] Add email verification on registration
 - [ ] Add email change with verification
 - [ ] Add tests for email flows
@@ -33,7 +33,7 @@ Depends on **Email Service Integration**. Cannot ship without a working email pr
 - [ ] Generate secure reset tokens with expiration
 - [ ] Add `POST /auth/reset-password` endpoint
 - [ ] Add rate limiting for reset requests
-- [ ] Send email templates via Loops.so
+- [ ] Send email templates via Resend
 - [ ] Add tests for password reset flow
 
 **Why**: Password reset is a natural extension of the email service and completes the account management story.
@@ -316,7 +316,7 @@ For a SOC 2-compliant production deployment, implement in this order:
 
 - **API Versioning + Response Envelope** — `/api/v1/` prefix + `{ data, meta }` envelope + `API-Version` header + `Deprecation`/`Sunset` headers
 - **Idempotency Keys** — `Idempotency-Key` middleware for POST endpoints
-- **Email Service Integration** — Email verification via Loops.so (vendor decision required before starting)
+- **Email Service Integration** — Email verification via Resend (vendor decision required before starting)
 - **Password Reset Flow** — Forgot/reset password flow (depends on Email Service Integration)
 - **API Documentation** — Spec-first OpenAPI 3.1 + `CHANGELOG.md`; remaining low-priority items as time permits
 - **Search & Discovery** — Phase 1: `pg_trgm` fuzzy todo search. Phase 2: Elasticsearch multi-entity search with outbox sync once comments/attachments/notes entities exist. Design memo: [docs/databases.md](docs/databases.md)

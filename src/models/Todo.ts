@@ -35,7 +35,11 @@ export const TodoService: TodoServiceInterface = {
     const limit = Math.min(params.limit ?? 20, 100);
     const todos = await prisma.todo.findMany({
       where: { userId },
-      orderBy: { createdAt: 'desc' },
+      // id breaks createdAt ties. created_at is TIMESTAMP(3), so burst inserts
+      // collide readily, and without a unique tiebreaker the order within a tie
+      // group is undefined per query — a page boundary landing inside one drops
+      // or repeats rows.
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       take: limit + 1,
       ...(params.cursor && { cursor: { id: params.cursor }, skip: 1 }),
     });

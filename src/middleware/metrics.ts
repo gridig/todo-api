@@ -71,6 +71,15 @@ export const auditWriteFailuresTotal = new Counter({
   registers: [register],
 });
 
+// Verification email send failures. Login is gated on verification, so a silent
+// mail outage means every new account is unusable with nothing failing loudly
+// in the request path — alert on any sustained non-zero rate.
+export const verificationEmailFailuresTotal = new Counter({
+  name: 'verification_email_failures_total',
+  help: 'Verification emails that failed to send (affected users cannot complete signup)',
+  registers: [register],
+});
+
 // db_pool_* gauges live in lib/prisma.ts (next to the pool they observe) and
 // register against the shared `register` exported above.
 

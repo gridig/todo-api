@@ -98,6 +98,53 @@ export class ForbiddenError extends AppError {
   }
 }
 
+// Login refused because the address was never confirmed. Deliberately 403, not
+// 401: the credentials were correct, so retrying them changes nothing — the
+// client must send the user through POST /auth/resend-verification. This does
+// not reintroduce the enumeration oracle that M3 closed, because the branch is
+// only reachable after a successful password check.
+export class EmailNotVerifiedError extends ForbiddenError {
+  constructor() {
+    super('Email address not verified', 'EMAIL_NOT_VERIFIED', {
+      suggestion: 'Check your inbox for the verification link, or request a new one',
+    });
+  }
+}
+
+// Verification-token redemption failures. The three cases are distinguished
+// because the client can act differently on each (retry the link, request a new
+// one, or stop), and the distinction leaks nothing: reaching any of them
+// requires already holding a 256-bit token value.
+export type VerificationFailureReason = 'invalid' | 'expired' | 'already_used';
+
+const VERIFICATION_FAILURES: Record<
+  VerificationFailureReason,
+  { code: string; message: string; suggestion: string }
+> = {
+  invalid: {
+    code: 'VERIFICATION_TOKEN_INVALID',
+    message: 'Verification link is not valid',
+    suggestion: 'Request a new verification email',
+  },
+  expired: {
+    code: 'VERIFICATION_TOKEN_EXPIRED',
+    message: 'Verification link has expired',
+    suggestion: 'Request a new verification email',
+  },
+  already_used: {
+    code: 'VERIFICATION_TOKEN_USED',
+    message: 'Verification link has already been used',
+    suggestion: 'Your address may already be verified — try logging in',
+  },
+};
+
+export class InvalidVerificationTokenError extends AppError {
+  constructor(reason: VerificationFailureReason) {
+    const { code, message, suggestion } = VERIFICATION_FAILURES[reason];
+    super(message, 400, code, { suggestion });
+  }
+}
+
 // Conflict errors — resource already exists or version mismatch (HTTP 409)
 export class ConflictError extends AppError {
   constructor(

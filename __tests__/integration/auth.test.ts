@@ -11,6 +11,15 @@ import { jest } from '@jest/globals';
 
 const app = createTestApp();
 
+// Login refuses to issue tokens for an unverified address, so suites that just
+// need a usable account create one and mark it verified directly. The
+// verification flow itself is covered in auth/email-verification.test.ts.
+async function createVerifiedUser(email: string, password = 'TestPass123!') {
+  const user = await UserService.create({ email, password });
+  await UserService.markEmailVerified(user.id);
+  return user;
+}
+
 beforeAll(async () => {
   await connectTestDB();
 });
@@ -25,14 +34,19 @@ afterAll(async () => {
 
 describe('Authentication Endpoints', () => {
   describe('POST /auth/register', () => {
-    it('should register a new user', async () => {
+    it('should accept a new registration without issuing a session', async () => {
       const response = await request(app).post('/auth/register').send({
         email: 'test@example.com',
         password: 'TestPass123!',
       });
 
-      expect(response.status).toBe(201);
-      expect(response.body.token).toBeDefined();
+      // 202, not 201: the account exists but is inert until verified, and no
+      // tokens are handed out — that is what makes the response identical for
+      // an address that was already taken.
+      expect(response.status).toBe(202);
+      expect(response.body.token).toBeUndefined();
+      expect(response.body.refreshToken).toBeUndefined();
+      expect(response.body.message).toBeDefined();
 
       // Encryption-at-rest: the stored email column is AES-256-GCM ciphertext,
       // never the plaintext address; the blind index carries the lookup.
@@ -54,32 +68,47 @@ describe('Authentication Endpoints', () => {
       expect(response.status).toBe(400);
     });
 
-    it('should reject duplicate email registration', async () => {
-      // First, create a user
-      await request(app).post('/auth/register').send({
+    // The account-existence oracle this endpoint used to be: a 409
+    // DUPLICATE_EMAIL confirmed whether any address was registered, undoing the
+    // anti-enumeration work done on login. Both responses must now be byte-identical.
+    it('does not reveal whether an address is already registered', async () => {
+      const fresh = await request(app).post('/auth/register').send({
         email: 'duplicate@example.com',
         password: 'TestPass123!',
       });
 
-      // Try to register again with the same email
-      const response = await request(app).post('/auth/register').send({
+      const duplicate = await request(app).post('/auth/register').send({
         email: 'duplicate@example.com',
         password: 'AnotherPass123!',
       });
 
-      expect(response.status).toBe(409);
-      expect(response.body.error).toBeDefined();
-      expect(response.body.error.code).toBe('DUPLICATE_EMAIL');
-      expect(response.body.error.message).toBe('Email already exists');
+      expect(duplicate.status).toBe(fresh.status);
+      expect(duplicate.body).toEqual(fresh.body);
+      expect(duplicate.status).toBe(202);
+      expect(duplicate.body.error).toBeUndefined();
+    });
+
+    it('does not overwrite the existing account when the address is taken', async () => {
+      await request(app)
+        .post('/auth/register')
+        .send({ email: 'squat@example.com', password: 'TestPass123!' });
+      const before = await UserService.findByEmail('squat@example.com');
+
+      await request(app)
+        .post('/auth/register')
+        .send({ email: 'squat@example.com', password: 'AttackerPass123!' });
+      const after = await UserService.findByEmail('squat@example.com');
+
+      // Same row, same credentials — a second registration must not reset the
+      // password or hand the address to whoever asked last.
+      expect(after!.id).toBe(before!.id);
+      expect(after!.password).toBe(before!.password);
     });
   });
 
   describe('POST /auth/login', () => {
     it('should login a user', async () => {
-      await UserService.create({
-        email: 'test@example.com',
-        password: 'TestPass123!',
-      });
+      await createVerifiedUser('test@example.com');
 
       const response = await request(app).post('/auth/login').send({
         email: 'test@example.com',
@@ -92,10 +121,7 @@ describe('Authentication Endpoints', () => {
 
     it('should reject invalid credentials (wrong password)', async () => {
       // First, create a user with known credentials
-      await UserService.create({
-        email: 'existing@example.com',
-        password: 'CorrectPass123!',
-      });
+      await createVerifiedUser('existing@example.com', 'CorrectPass123!');
 
       // Now try to login with WRONG password
       const response = await request(app).post('/auth/login').send({
@@ -150,10 +176,7 @@ describe('Authentication Endpoints', () => {
     });
 
     it('should treat emails as case-insensitive', async () => {
-      await request(app).post('/auth/register').send({
-        email: 'Test@EXAMPLE.com',
-        password: 'TestPass123!',
-      });
+      await createVerifiedUser('Test@EXAMPLE.com');
 
       const response = await request(app).post('/auth/login').send({
         email: 'test@example.com',
@@ -177,7 +200,10 @@ describe('Authentication Endpoints', () => {
         email: nfc,
         password: 'TestPass123!',
       });
-      expect(registerResponse.status).toBe(201);
+      expect(registerResponse.status).toBe(202);
+      // Verify via the NFC form; the login below then uses NFD.
+      const registered = await UserService.findByEmail(nfc);
+      await UserService.markEmailVerified(registered!.id);
 
       const loginResponse = await request(app).post('/auth/login').send({
         email: nfd,
@@ -190,15 +216,14 @@ describe('Authentication Endpoints', () => {
 
   describe('JWT payload shape and bcrypt rehash', () => {
     it('issues tokens with sub/iss/aud claims and HS256', async () => {
-      const registerResponse = await request(app)
-        .post('/auth/register')
-        .send({
-          email: `claims-${Date.now()}@example.com`,
-          password: 'TestPass123!',
-        });
-      expect(registerResponse.status).toBe(201);
+      const email = `claims-${Date.now()}@example.com`;
+      await createVerifiedUser(email);
+      const loginResponse = await request(app)
+        .post('/auth/login')
+        .send({ email, password: 'TestPass123!' });
+      expect(loginResponse.status).toBe(200);
 
-      const decoded = jwt.decode(registerResponse.body.token, {
+      const decoded = jwt.decode(loginResponse.body.token, {
         complete: true,
       });
       expect(decoded).not.toBeNull();
@@ -244,6 +269,7 @@ describe('Authentication Endpoints', () => {
         select: { id: true, password: true },
       });
       expect(bcrypt.getRounds(user.password)).toBe(10);
+      await UserService.markEmailVerified(user.id);
 
       const loginResponse = await request(app).post('/auth/login').send({
         email,

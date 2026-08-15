@@ -4,6 +4,7 @@ import {
   connectTestDB,
   disconnectTestDB,
   cleanupTestData,
+  registerVerifyAndLogin,
 } from '../../helpers/testSetup.js';
 
 const app = createTestApp();
@@ -23,10 +24,7 @@ afterAll(async () => {
 describe('POST /auth/logout', () => {
   it('revokes the presented refresh token', async () => {
     const email = `logout-${Date.now()}@example.com`;
-    const register = await request(app)
-      .post('/auth/register')
-      .send({ email, password: 'TestPass123!' });
-    const { refreshToken } = register.body;
+    const { refreshToken } = await registerVerifyAndLogin(app, email);
 
     const logout = await request(app).post('/auth/logout').send({ refreshToken });
     expect(logout.status).toBe(200);

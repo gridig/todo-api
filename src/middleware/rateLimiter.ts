@@ -127,12 +127,17 @@ const baseOptions = (limitType: string, overrides: Partial<Options>): Partial<Op
 });
 
 const limiterDefaults: Record<string, Partial<Options>> = {
-  // Compound (ip, email) key. The previous IP-only key let an attacker on a
-  // single IP brute-force one account 3× per window then switch accounts.
-  // skipSuccessfulRequests only decrements the same (ip, email) bucket under
-  // the compound key, so successful logins don't count toward the failed-
-  // attempt cap and can't reset any other account's counter — which is why
-  // the flag is safe here (it wasn't under the old IP-only key).
+  // Compound (ip, email) key, adopted to make skipSuccessfulRequests safe:
+  // that flag decrements the bucket on success, so under the old IP-only key an
+  // attacker could refill their brute-force budget by logging into an account
+  // they control. Under the compound key a success only decrements that same
+  // (ip, email) bucket and can't touch any other account's counter.
+  //
+  // The cost is real and deliberate: because the email is in the key, rotating
+  // the target mints a fresh 3-attempt bucket, so this limiter does NOT bound
+  // credential stuffing spread across many accounts from one IP — only the
+  // global limiter does, two orders of magnitude higher. A dedicated per-IP
+  // login cap is the missing layer; see SCRUTINY.md M4.
   // ipKeyGenerator collapses IPv6 /64 prefixes so a single attacker can't
   // walk a /64 to defeat per-IP limits. Per express-rate-limit v8 docs, any
   // custom keyGenerator that incorporates req.ip MUST use this helper.
@@ -161,6 +166,26 @@ const limiterDefaults: Record<string, Partial<Options>> = {
     },
     skipFailedRequests: false,
     keyGenerator: loginEmailKey,
+  },
+
+  // Pure per-IP failure cap, layered under the compound limiter above. Because
+  // the compound key includes the email, rotating targets mints a fresh bucket
+  // per account, so nothing there bounds credential stuffing spread across many
+  // accounts from one source — only the global limiter did, at ~800/hour.
+  // Failures only (skipSuccessfulRequests), so ordinary logins from a shared
+  // egress IP (corporate NAT, mobile CGNAT) never consume the budget; 60 failed
+  // logins per 15 minutes from one address is already anomalous.
+  //
+  // Note this cap is per-instance unless REDIS_URL is set: N instances or
+  // CLUSTER_WORKERS=N multiply the effective ceiling by N.
+  'login-ip': {
+    windowMs: 15 * 60 * 1000,
+    max: 60,
+    message: {
+      error: 'Too many failed login attempts from this network. Please try again later.',
+    },
+    skipSuccessfulRequests: true,
+    skipFailedRequests: false,
   },
 
   write: {
@@ -217,6 +242,43 @@ const limiterDefaults: Record<string, Partial<Options>> = {
       error: 'Too many token refresh attempts. Please try again later.',
     },
   },
+
+  // Token redemption. The token is 256-bit random so guessing is futile; this
+  // bounds abuse of the lookup rather than protecting the token itself.
+  'verify-email': {
+    windowMs: 15 * 60 * 1000,
+    max: 30,
+    message: {
+      error: 'Too many verification attempts. Please try again later.',
+    },
+  },
+
+  // Resend triggers an outbound email, so the cost of abuse is someone else's
+  // inbox (and our sender reputation) rather than CPU. Keyed by the blind index
+  // of the address — the same canonicalization the login limiter uses — so
+  // flooding one victim can't be spread across IPs.
+  'resend-verification': {
+    windowMs: 60 * 60 * 1000,
+    max: 3,
+    message: {
+      error: 'Too many verification emails requested. Please try again later.',
+    },
+    keyGenerator: loginEmailKey,
+  },
+
+  // Data export loads a user's entire history into memory and serializes it.
+  // Under the generic read cap one account could replay that 100×/minute, so
+  // the amplification — not any single response — is what needs bounding.
+  // Keyed by user rather than IP so the limit follows the account whose data is
+  // being read; auth runs before this limiter, so userId is always present.
+  'user-export': {
+    windowMs: 60 * 60 * 1000,
+    max: 5,
+    message: {
+      error: 'Too many export requests. Please try again later.',
+    },
+    keyGenerator: (req: Request): string => req.userId ?? ipKeyGenerator(req.ip ?? 'unknown'),
+  },
 };
 
 export const buildLimiter = (
@@ -227,6 +289,10 @@ export const buildLimiter = (
 
 export const authLimiter = buildLimiter('auth');
 export const loginEmailLimiter = buildLimiter('login-email');
+export const loginIpLimiter = buildLimiter('login-ip');
+export const exportLimiter = buildLimiter('user-export');
+export const verifyEmailLimiter = buildLimiter('verify-email');
+export const resendVerificationLimiter = buildLimiter('resend-verification');
 export const writeLimiter = buildLimiter('write');
 export const readLimiter = buildLimiter('read');
 export const globalLimiter = buildLimiter('global');

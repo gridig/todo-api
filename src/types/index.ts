@@ -18,12 +18,17 @@ export interface User {
   name: string | null;
   role: UserRole;
   password: string;
+  // Null until the address is proven via POST /auth/verify. Login refuses to
+  // issue tokens while null.
+  emailVerifiedAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
 }
 
-// findByEmail returns only these three; email is decrypted, emailHash omitted.
-export type UserLoginFields = Pick<User, 'id' | 'email' | 'password'>;
+// findByEmail returns only the fields the login flow needs: identity, the
+// hash to compare, and the verification gate. email is decrypted, emailHash
+// omitted.
+export type UserLoginFields = Pick<User, 'id' | 'email' | 'password' | 'emailVerifiedAt'>;
 
 // Public profile shape returned by the /user/me and /admin/users endpoints —
 // never carries the password hash or emailHash. email is decrypted before it
@@ -120,7 +125,13 @@ export interface ErrorResponse {
   requestId?: string;
 }
 
-export type AuthRouteResponse = AuthResponse | ErrorResponse;
+// Register/verify/resend return a message rather than tokens — an account is
+// inert until its address is verified, so there is no session to hand back.
+export interface MessageResponse {
+  message: string;
+}
+
+export type AuthRouteResponse = AuthResponse | MessageResponse | ErrorResponse;
 
 // ==================== JWT Types ====================
 
@@ -155,6 +166,9 @@ export type ErrorRequestHandler = (
 
 export interface UserServiceInterface {
   create(data: { email: string; password: string }): Promise<User>;
+  // Mark an address verified. Used by the verification redemption path and by
+  // the test helpers that need a usable account without a mail round-trip.
+  markEmailVerified(userId: string): Promise<void>;
   findByEmail(email: string): Promise<UserLoginFields | null>;
   // Read a user's public profile by id (email decrypted); null if not found.
   findById(userId: string): Promise<UserProfile | null>;

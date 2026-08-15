@@ -8,8 +8,12 @@ import { requireAdmin } from '@/middleware/authorize.js';
 import {
   authLimiter,
   loginEmailLimiter,
+  loginIpLimiter,
+  exportLimiter,
   registerLimiter,
   refreshLimiter,
+  resendVerificationLimiter,
+  verifyEmailLimiter,
   readLimiter,
   writeLimiter,
 } from '@/middleware/rateLimiter.js';
@@ -49,10 +53,24 @@ describe('route middleware wiring', () => {
       expect(findRoute(authRoutes, 'post', '/register').handlers).toContain(registerLimiter);
     });
 
-    it('POST /login mounts authLimiter AND loginEmailLimiter', () => {
+    it('POST /login mounts all three login limiters', () => {
       const { handlers } = findRoute(authRoutes, 'post', '/login');
       expect(handlers).toContain(authLimiter);
       expect(handlers).toContain(loginEmailLimiter);
+      // Without this one, rotating the target email defeats the compound key.
+      expect(handlers).toContain(loginIpLimiter);
+    });
+
+    it('POST /verify mounts verifyEmailLimiter', () => {
+      expect(findRoute(authRoutes, 'post', '/verify').handlers).toContain(verifyEmailLimiter);
+    });
+
+    it('POST /resend-verification mounts resendVerificationLimiter', () => {
+      // Unmounting this one turns the endpoint into a mail-bomb primitive
+      // against any address, so guard the wiring explicitly.
+      expect(findRoute(authRoutes, 'post', '/resend-verification').handlers).toContain(
+        resendVerificationLimiter,
+      );
     });
 
     it('POST /refresh and /logout mount refreshLimiter', () => {
@@ -88,7 +106,7 @@ describe('route middleware wiring', () => {
       ['patch', '/me/email', writeLimiter],
       ['patch', '/me/password', writeLimiter],
       ['delete', '/me', writeLimiter],
-      ['get', '/me/export', readLimiter],
+      ['get', '/me/export', exportLimiter],
     ])('%s %s mounts auth and the correct limiter', (method, path, limiter) => {
       const { handlers } = findRoute(userRoutes, method as string, path as string);
       expect(handlers).toContain(auth);

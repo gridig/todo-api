@@ -4,6 +4,7 @@ import {
   connectTestDB,
   disconnectTestDB,
   cleanupTestData,
+  registerVerifyAndLogin,
 } from '../../helpers/testSetup.js';
 
 const app = createTestApp();
@@ -26,9 +27,9 @@ describe('POST /auth/logout-all', () => {
     const password = 'TestPass123!';
 
     // Two independent sessions for the same user (e.g. two devices).
-    const first = await request(app).post('/auth/register').send({ email, password });
-    const accessToken = first.body.token as string;
-    const rtA = first.body.refreshToken as string;
+    const first = await registerVerifyAndLogin(app, email, password);
+    const accessToken = first.token;
+    const rtA = first.refreshToken;
 
     const second = await request(app).post('/auth/login').send({ email, password });
     const rtB = second.body.refreshToken as string;

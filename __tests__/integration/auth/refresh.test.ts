@@ -9,6 +9,7 @@ import {
   disconnectTestDB,
   cleanupTestData,
   pollForAuditRow,
+  registerVerifyAndLogin,
 } from '../../helpers/testSetup.js';
 
 const app = createTestApp();
@@ -16,10 +17,9 @@ const app = createTestApp();
 // Register a fresh user and return its access token, refresh token, and id.
 async function registerUser(): Promise<{ token: string; refreshToken: string; userId: string }> {
   const email = `refresh-${Date.now()}-${Math.round(Math.random() * 1e6)}@example.com`;
-  const res = await request(app).post('/auth/register').send({ email, password: 'TestPass123!' });
-  expect(res.status).toBe(201);
-  const userId = (jwt.decode(res.body.token) as jwt.JwtPayload).sub as string;
-  return { token: res.body.token, refreshToken: res.body.refreshToken, userId };
+  // Registration is inert until verified and returns no tokens, so the session
+  // now comes from the full register → verify → login flow.
+  return registerVerifyAndLogin(app, email);
 }
 
 beforeAll(async () => {

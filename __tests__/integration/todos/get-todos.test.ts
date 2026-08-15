@@ -8,6 +8,7 @@ import {
 import { createTestTodos } from '../../helpers/todoHelpers.js';
 import TodoService from '@/models/Todo.js';
 import UserService from '@/models/User.js';
+import prisma from '@/lib/prisma.js';
 import type { Application } from 'express';
 
 const app: Application = createTestApp();
@@ -62,6 +63,45 @@ describe('GET /todos - List Todos', () => {
       expect(response.body.data).toHaveLength(2);
       expect(response.body.meta.hasMore).toBe(true);
       expect(response.body.meta.nextCursor).not.toBeNull();
+    });
+
+    // Regression for the missing cursor tiebreaker: created_at is TIMESTAMP(3),
+    // so burst inserts share a timestamp, and ordering by createdAt alone leaves
+    // the order inside a tie group unconstrained — a page boundary landing in
+    // one can drop or repeat rows.
+    //
+    // Asserting only "no loss, no duplication" is not enough: Postgres happens
+    // to return a small unindexed tie group in physical order consistently, so
+    // that assertion passes with or without the fix. What the tiebreaker
+    // actually guarantees is a *total* order, so assert the exact sequence —
+    // id DESC, which random v4 ids make vanishingly unlikely to coincide with
+    // insertion order.
+    it('should return rows sharing a createdAt in a total, id-tiebroken order', async () => {
+      const sharedCreatedAt = new Date('2026-01-01T00:00:00.000Z');
+      const created = await Promise.all(
+        Array.from({ length: 6 }, (_, i) =>
+          prisma.todo.create({
+            data: { text: `tie-${i}`, userId, createdAt: sharedCreatedAt },
+          }),
+        ),
+      );
+      const expectedOrder = created.map((todo) => todo.id).sort((a, b) => (a < b ? 1 : -1));
+
+      const seen: string[] = [];
+      let cursor: string | null = null;
+      for (let page = 0; page < created.length; page++) {
+        // Annotated to break the inference cycle: cursor's narrowed type would
+        // otherwise depend on the response it is assigned from at the loop foot.
+        const query: string = cursor ? `/todos?limit=2&cursor=${cursor}` : '/todos?limit=2';
+        const response = await request(app).get(query).set('Authorization', `Bearer ${authToken}`);
+
+        expect(response.status).toBe(200);
+        seen.push(...response.body.data.map((todo: { id: string }) => todo.id));
+        if (!response.body.meta.hasMore) break;
+        cursor = response.body.meta.nextCursor;
+      }
+
+      expect(seen).toEqual(expectedOrder);
     });
 
     it('should navigate to the next page using cursor', async () => {

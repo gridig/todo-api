@@ -2,6 +2,7 @@ import { env } from './config/env.js';
 import { Server } from 'http';
 import cluster from 'cluster';
 import os from 'os';
+import { pathToFileURL } from 'node:url';
 import prisma, { pool, probePool, probeDatabase, logPoolHealth } from './lib/prisma.js';
 import { createApp } from './app.js';
 import logger from './middleware/logger.js';
@@ -11,14 +12,37 @@ import { redisClient } from './middleware/rateLimiter.js';
 const POOL_HEALTH_LOG_INTERVAL_MS = 5 * 60 * 1000;
 let poolHealthInterval: ReturnType<typeof setInterval> | undefined;
 
+// Pino's default stdout destination writes asynchronously, and its exit-time
+// flushSync deliberately skips a chunk already handed to fs.write — so exiting
+// immediately after logger.fatal() races the write and can drop the only record
+// of why the process died. Flush first, bounded so a wedged destination can't
+// keep a dying process alive.
+//
+// The guard keeps the first fatal authoritative. Exiting is no longer
+// instantaneous, and a failing dependency (e.g. a reconnecting Redis client)
+// rejects repeatedly — without it, every rejection racing the flush window logs
+// another fatal and arms another exit timer.
+const FATAL_FLUSH_TIMEOUT_MS = 250;
+let isExitingFatal = false;
+
+const fatalExit = (context: Record<string, unknown>, msg: string): void => {
+  if (isExitingFatal) return;
+  isExitingFatal = true;
+
+  logger.fatal(context, msg);
+  const forced = setTimeout(() => process.exit(1), FATAL_FLUSH_TIMEOUT_MS);
+  logger.flush(() => {
+    clearTimeout(forced);
+    process.exit(1);
+  });
+};
+
 process.on('unhandledRejection', (reason) => {
-  logger.fatal({ reason }, 'Unhandled promise rejection');
-  process.exit(1);
+  fatalExit({ reason }, 'Unhandled promise rejection');
 });
 
 process.on('uncaughtException', (err) => {
-  logger.fatal({ err }, 'Uncaught exception');
-  process.exit(1);
+  fatalExit({ err }, 'Uncaught exception');
 });
 
 export async function startServer() {
@@ -130,6 +154,36 @@ export async function startServer() {
   }
 }
 
+const REDIS_QUIT_TIMEOUT_MS = 2000;
+
+// quit() has two failure modes and only one of them is a rejection: a client
+// that already errored rejects (caught here so it can't abort the drain via the
+// unhandledRejection handler), while one stuck mid-reconnect may never settle
+// at all — which would silently spend the rest of the force-exit budget. Race
+// the wait so the drain proceeds either way, rather than relying on destroy()
+// to settle the pending quit().
+async function closeRedis(client: NonNullable<typeof redisClient>): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const outcome = await Promise.race([
+      client.quit().then(() => 'closed' as const),
+      new Promise<'timeout'>((resolve) => {
+        timer = setTimeout(() => resolve('timeout'), REDIS_QUIT_TIMEOUT_MS);
+      }),
+    ]);
+    if (outcome === 'timeout') {
+      logger.warn('Redis quit did not settle in time, forcing disconnect');
+      client.destroy();
+    } else {
+      logger.info('Redis connection closed');
+    }
+  } catch (err) {
+    logger.warn({ err }, 'Redis quit failed during shutdown');
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export function setupGracefulShutdown(server: Server): void {
   let isShuttingDown = false;
 
@@ -162,14 +216,7 @@ export function setupGracefulShutdown(server: Server): void {
 
     // 4. Only disconnect DB after HTTP is fully drained
     if (redisClient) {
-      // A client stuck mid-connect (or already errored) can reject quit();
-      // that must not abort the drain via the unhandledRejection exit(1).
-      try {
-        await redisClient.quit();
-        logger.info('Redis connection closed');
-      } catch (err) {
-        logger.warn({ err }, 'Redis quit failed during shutdown');
-      }
+      await closeRedis(redisClient);
     }
 
     if (poolHealthInterval) {
@@ -190,8 +237,11 @@ export function setupGracefulShutdown(server: Server): void {
   process.on('SIGINT', () => shutdown('SIGINT'));
 }
 
-// Only start server when run directly (not when imported)
-const isMainModule = import.meta.url === `file://${process.argv[1]}`;
+// Only start server when run directly (not when imported). pathToFileURL (not a
+// hand-built `file://` + path) because import.meta.url percent-encodes spaces and
+// non-ASCII and resolves symlinks — a mismatch here exits 0 without starting the
+// server or logging anything. Same pattern as the operator scripts.
+const isMainModule = !!process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
 if (isMainModule) {
   const requestedWorkers = env.CLUSTER_WORKERS;
   const numWorkers = requestedWorkers === 0 ? os.cpus().length : requestedWorkers;
@@ -221,7 +271,7 @@ if (isMainModule) {
         recentRestarts.push(now);
 
         if (recentRestarts.length > MAX_RESTARTS_IN_WINDOW) {
-          logger.fatal(
+          fatalExit(
             {
               restarts: recentRestarts.length,
               windowMs: RESTART_WINDOW_MS,
@@ -231,7 +281,7 @@ if (isMainModule) {
             },
             'Worker crash-loop detected, primary exiting to let platform restart',
           );
-          process.exit(1);
+          return;
         }
 
         logger.warn(

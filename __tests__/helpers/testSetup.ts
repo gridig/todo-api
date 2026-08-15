@@ -1,5 +1,7 @@
 import { Application } from 'express';
+import request from 'supertest';
 import { Pool, type QueryResultRow } from 'pg';
+import EmailVerificationTokenService from '@/models/EmailVerificationToken.js';
 import type { User, JWTPayload } from '@/types/index.js';
 import { createApp } from '@/app.js';
 import prisma, { pool, probePool } from '@/lib/prisma.js';
@@ -74,8 +76,15 @@ interface TestUserResult {
   userId: string;
 }
 
-// Setup test user and auth token - reusable
-export async function createTestUser(email: string | null = null): Promise<TestUserResult> {
+// Setup test user and auth token - reusable.
+// Accounts are marked verified by default: login refuses to issue tokens for an
+// unverified address, so every suite that isn't specifically exercising the
+// verification flow needs a usable account without a mail round-trip. Pass
+// { verified: false } to get a freshly-registered (inert) account.
+export async function createTestUser(
+  email: string | null = null,
+  options: { verified?: boolean } = {},
+): Promise<TestUserResult> {
   // Use timestamp to ensure unique email if not provided
   const userEmail = email || `test-${generateUniqueId()}@example.com`;
 
@@ -83,6 +92,11 @@ export async function createTestUser(email: string | null = null): Promise<TestU
     email: userEmail,
     password: 'TestPass123!',
   });
+
+  if (options.verified !== false) {
+    await UserService.markEmailVerified(user.id);
+    user.emailVerifiedAt = new Date();
+  }
 
   // Issue test tokens in the same shape production issues: sub + iss + aud
   // (iss/aud are enforced unconditionally by middleware/auth.ts).
@@ -103,6 +117,46 @@ export async function createTestAdmin(email: string | null = null): Promise<Test
   const result = await createTestUser(email);
   await prisma.user.update({ where: { id: result.userId }, data: { role: 'admin' } });
   return result;
+}
+
+// Full signup through the public routes: register, verify, then log in.
+// Registration no longer returns tokens — an account is inert until its address
+// is verified — so suites that used to read tokens straight out of the register
+// response go through here instead.
+//
+// The raw verification token exists only in the email (the row stores its
+// SHA-256), so a test cannot read back the one registration sent. It mints an
+// equivalent token through the same service the route uses and redeems that via
+// POST /auth/verify, which keeps the redemption path under test.
+export async function registerVerifyAndLogin(
+  app: Application,
+  email: string,
+  password: string = 'TestPass123!',
+): Promise<{ token: string; refreshToken: string; userId: string }> {
+  const registered = await request(app).post('/auth/register').send({ email, password });
+  if (registered.status !== 202) {
+    throw new Error(`register failed: ${registered.status} ${JSON.stringify(registered.body)}`);
+  }
+
+  const user = await UserService.findByEmail(email);
+  if (!user) throw new Error(`register did not create an account for ${email}`);
+
+  const rawToken = await EmailVerificationTokenService.issue(user.id);
+  const verified = await request(app).post('/auth/verify').send({ token: rawToken });
+  if (verified.status !== 200) {
+    throw new Error(`verify failed: ${verified.status} ${JSON.stringify(verified.body)}`);
+  }
+
+  const loggedIn = await request(app).post('/auth/login').send({ email, password });
+  if (loggedIn.status !== 200) {
+    throw new Error(`login failed: ${loggedIn.status} ${JSON.stringify(loggedIn.body)}`);
+  }
+
+  return {
+    token: loggedIn.body.token as string,
+    refreshToken: loggedIn.body.refreshToken as string,
+    userId: user.id,
+  };
 }
 
 export async function connectTestDB(): Promise<void> {

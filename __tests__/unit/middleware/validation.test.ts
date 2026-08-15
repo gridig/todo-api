@@ -130,22 +130,41 @@ describe('Validation Schemas', () => {
       expect(error).toBeDefined();
     });
 
-    it('should accept email with 72 characters', () => {
+    // Length has to come from the domain: Joi's .email() enforces RFC 5321's
+    // 64-char local-part limit, so a long local part is rejected as malformed
+    // rather than as too long, which would not exercise the cap.
+    const EMAIL_254 = `${'a'.repeat(60)}@${'b'.repeat(63)}.${'b'.repeat(63)}.${'b'.repeat(61)}.com`;
+    const EMAIL_255 = `${'a'.repeat(60)}@${'b'.repeat(63)}.${'b'.repeat(63)}.${'b'.repeat(62)}.com`;
+
+    it('should accept an address at the RFC 5321 maximum of 254 characters', () => {
+      expect(EMAIL_254).toHaveLength(254);
       const { error } = schemas.register.validate({
-        email: 'a'.repeat(60) + '@example.com',
+        email: EMAIL_254,
         password: validPassword,
       });
 
       expect(error).toBeUndefined();
     });
 
-    it('should reject email with 73 characters', () => {
+    it('should reject an address of 255 characters', () => {
+      expect(EMAIL_255).toHaveLength(255);
       const { error } = schemas.register.validate({
-        email: 'a'.repeat(61) + '@example.com',
+        email: EMAIL_255,
         password: validPassword,
       });
 
       expect(error).toBeDefined();
+    });
+
+    // Regression: the cap used to be 72 — the bcrypt password limit applied to
+    // the wrong field — which rejected ordinary long-but-valid addresses.
+    it('should accept an address longer than the old 72-character cap', () => {
+      const { error } = schemas.register.validate({
+        email: `${'a'.repeat(60)}@${'b'.repeat(40)}.example.com`,
+        password: validPassword,
+      });
+
+      expect(error).toBeUndefined();
     });
 
     it('should normalize email to lowercase', () => {

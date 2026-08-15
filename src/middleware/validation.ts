@@ -69,11 +69,14 @@ export const validateParams = (schema: Schema) => {
 // rate-limit bucket (middleware/rateLimiter.ts), and the stored blind index
 // (models/User.ts) all key off the same bytes — denies Unicode-variant evasion
 // (NFC vs NFD, full-width, homoglyph).
+// 254 is the RFC 5321 ceiling for a full address. The column is TEXT and the
+// blind index is fixed-width, so nothing below that is load-bearing — the old
+// 72 was the bcrypt password limit applied to the wrong field.
 const emailSchema = Joi.string()
   .email()
   .trim()
   .custom((value: string) => normalizeEmail(value))
-  .max(72);
+  .max(254);
 
 // Password complexity rule, shared by registration and password change so the
 // two never drift apart. `.required()` is applied per-use.
@@ -110,6 +113,19 @@ export const schemas = {
 
   logout: Joi.object({
     refreshToken: Joi.string().max(512).required(),
+  }),
+
+  // Opaque verification token from the emailed link (base64url, ~43 chars for
+  // 32 bytes). Same rationale as `refresh`: assert presence and a sane ceiling,
+  // let the hash lookup decide validity.
+  verifyEmail: Joi.object({
+    token: Joi.string().max(512).required(),
+  }),
+
+  // Resend takes only the address. The handler's response is identical whether
+  // or not it matches an account, so this must not leak anything either.
+  resendVerification: Joi.object({
+    email: emailSchema.required(),
   }),
 
   // Profile update: display name only. Email lives on its own endpoint

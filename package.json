@@ -9,7 +9,10 @@
       "bcrypt",
       "esbuild",
       "prisma"
-    ]
+    ],
+    "overrides": {
+      "fast-uri@<3.1.5": "^3.1.5"
+    }
   },
   "scripts": {
     "bench:seed": "tsx benchmarks/seed.ts",

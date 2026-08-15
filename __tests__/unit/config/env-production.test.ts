@@ -16,6 +16,9 @@ const baseProdCfg = (overrides: Partial<Parameters<typeof assertProductionEnv>[0
   CORS_CREDENTIALS: 'false',
   ENCRYPTION_KEYRING: STRONG_KEYRING,
   ENCRYPTION_BLIND_INDEX_KEY: STRONG_BLIND_INDEX_KEY,
+  RESEND_API_KEY: 're_test_key',
+  MAIL_FROM: 'Todo API <noreply@example.com>',
+  APP_BASE_URL: 'https://app.example.com',
   ...overrides,
 });
 

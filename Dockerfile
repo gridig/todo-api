@@ -53,8 +53,12 @@ USER appuser
 
 EXPOSE 3001
 
+# Reads PORT rather than hardcoding 3001: the app binds env.PORT, so on any
+# platform that injects its own PORT a fixed probe marks a healthy container
+# unhealthy and restart-loops it. String concatenation, not a template literal —
+# backticks inside this shell-form CMD would be command substitution.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-  CMD node -e "fetch('http://localhost:3001/health/ready').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"
+  CMD node -e "const p=process.env.PORT||3001;fetch('http://localhost:'+p+'/health/ready').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"
 
 # Migrations run as the Railway pre-deploy command (railway.json → deploy.preDeployCommand),
 # not here — so a failed migration aborts the deploy and keeps the old version serving,

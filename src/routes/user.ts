@@ -2,7 +2,7 @@ import express, { Response, Router } from 'express';
 import UserService from '../models/User.js';
 import TodoService from '../models/Todo.js';
 import { auth, requireUserId } from '../middleware/auth.js';
-import { readLimiter, writeLimiter } from '../middleware/rateLimiter.js';
+import { exportLimiter, readLimiter, writeLimiter } from '../middleware/rateLimiter.js';
 import { validate, schemas } from '../middleware/validation.js';
 import { InvalidCredentialsError, UserNotFoundError } from '../errors/index.js';
 import { writeOrLog } from '../lib/auditLog.js';
@@ -120,7 +120,10 @@ router.delete(
 
 // GET data export (SOC 2 Privacy — data portability). Returns the full profile
 // plus every todo as a downloadable JSON attachment, and audits the access.
-router.get('/me/export', auth, readLimiter, async (req, res: Response): Promise<void> => {
+// exportLimiter (5/hour/user), not readLimiter: this handler loads the caller's
+// entire todo history into memory, so the cost is in replaying it, not in any
+// single response. The global per-IP limiter still backstops it.
+router.get('/me/export', auth, exportLimiter, async (req, res: Response): Promise<void> => {
   const { log } = req as RequestWithLogger;
   const userId = requireUserId(req);
 

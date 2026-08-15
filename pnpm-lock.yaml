@@ -4,6 +4,9 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
+overrides:
+  fast-uri@<3.1.5: ^3.1.5
+
 importers:
 
   .:
@@ -33,7 +36,7 @@ importers:
         specifier: 8.6.1
         version: 8.6.1(express@5.2.1)
       helmet:
-        specifier: ^8.1.0
+        specifier: 8.3.0
         version: 8.3.0
       joi:
         specifier: 18.2.3
@@ -57,10 +60,10 @@ importers:
         specifier: 15.1.3
         version: 15.1.3
       rate-limit-redis:
-        specifier: ^5.0.0
+        specifier: 5.0.0
         version: 5.0.0(express-rate-limit@8.6.1(express@5.2.1))
       redis:
-        specifier: ^6.0.0
+        specifier: 6.1.0
         version: 6.1.0(@opentelemetry/api@1.9.1)
       uuid:
         specifier: 14.0.1
@@ -106,7 +109,7 @@ importers:
         specifier: 10.8.0
         version: 10.8.0(jiti@2.7.0)
       eslint-config-prettier:
-        specifier: ^10.1.8
+        specifier: 10.1.8
         version: 10.1.8(eslint@10.8.0(jiti@2.7.0))
       globals:
         specifier: 17.8.0
@@ -115,7 +118,7 @@ importers:
         specifier: 30.4.2
         version: 30.4.2(@types/node@26.1.2)(ts-node@10.9.2(@types/node@26.1.2)(typescript@6.0.3))
       prettier:
-        specifier: ^3.8.3
+        specifier: 3.9.6
         version: 3.9.6
       supertest:
         specifier: 7.2.2
@@ -1854,8 +1857,8 @@ packages:
   fast-safe-stringify@2.1.1:
     resolution: {integrity: sha512-W+KJc2dmILlPplD/H4K9l9LcAHAfPtP6BY84uVLXQ6Evcz9Lcg33Y2z1IVblT6xdY54PXYVHEv+0Wpq8Io6zkA==}
 
-  fast-uri@3.1.4:
-    resolution: {integrity: sha512-8JnbkQ4juDyvYs4mgFGQqg4yCYtFDtUtmp2QIQq11ZZe5CFQ5wcqm1rqDgAh/QdMySuBnPzMUiJUNZG5N/AiQw==}
+  fast-uri@3.1.5:
+    resolution: {integrity: sha512-gHwA1O9LDIcKunMKhObS/HimwtehO1nPUECKAu5TpKgaO19fcWEl4bliWe1jWxVFvIXztJjjQ4L8XQ1EU9f7Jw==}
 
   fb-watchman@2.0.2:
     resolution: {integrity: sha512-p5161BqbuCaSnB8jIbzQHOlpgsPmK5rJVDfDKO91Axs5NC1uu3HRQm6wt9cd9/+GtQQIO53JdGXXoyDpTAsgYA==}
@@ -4447,7 +4450,7 @@ snapshots:
   ajv@8.20.0:
     dependencies:
       fast-deep-equal: 3.1.3
-      fast-uri: 3.1.4
+      fast-uri: 3.1.5
       json-schema-traverse: 1.0.0
       require-from-string: 2.0.2
 
@@ -5055,7 +5058,7 @@ snapshots:
 
   fast-safe-stringify@2.1.1: {}
 
-  fast-uri@3.1.4: {}
+  fast-uri@3.1.5: {}
 
   fb-watchman@2.0.2:
     dependencies:

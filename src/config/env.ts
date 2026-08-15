@@ -155,6 +155,34 @@ export const env = cleanEnv(process.env, {
     desc: 'Refresh-token lifetime in days. Rotated on every /auth/refresh; the absolute expiry here caps a stolen-but-unused token.',
   }),
 
+  VERIFICATION_TOKEN_EXPIRY_HOURS: num({
+    default: 24,
+    desc: 'Email-verification link lifetime in hours. Single-use; a new one is issued by POST /auth/resend-verification.',
+  }),
+
+  // Outbound mail (lib/mailer.ts). Unset in dev/CI selects the log transport,
+  // which prints the verification link instead of sending it. Production must
+  // supply real values — assertProductionEnv refuses to boot otherwise, so a
+  // misconfigured deploy fails loudly rather than silently dropping every
+  // verification email and locking new users out of their accounts.
+  RESEND_API_KEY: str({
+    default: undefined,
+    desc: 'Resend API key. Required in production; unset selects the dev log transport.',
+    example: 're_xxxxxxxxxxxxxxxxxxxxxxxx',
+  }),
+
+  MAIL_FROM: str({
+    default: undefined,
+    desc: 'From address for outbound mail, e.g. "Todo API <noreply@example.com>". Required in production.',
+    example: 'Todo API <noreply@example.com>',
+  }),
+
+  APP_BASE_URL: str({
+    default: 'http://localhost:3000',
+    desc: 'Public origin of the frontend, used to build the verification link (<APP_BASE_URL>/verify-email?token=…).',
+    example: 'https://app.example.com',
+  }),
+
   // Field-level encryption (see docs/configuration.md → "Encryption at rest").
   // All three are required in every environment (like JWT_SECRET) so the app
   // never silently starts without a key. Dev/test use the committed placeholder
@@ -356,9 +384,58 @@ export const env = cleanEnv(process.env, {
 
 export const METRICS_TOKEN_MIN_LENGTH = 32;
 
+export interface EnvInvariantInput {
+  SHUTDOWN_DELAY_MS: number;
+  SHUTDOWN_TIMEOUT_MS: number;
+  DB_POOL_MAX: number;
+  DB_POOL_MIN: number;
+  JWT_SECRET: string;
+  JWT_SECRET_PREVIOUS?: string | undefined;
+}
+
+// Cross-field invariants cleanEnv's per-variable validation can't express.
+// These hold in every environment: each violation silently degrades behavior at
+// runtime instead of failing at the point of use, so they fail the boot instead.
+export function assertEnvInvariants(cfg: EnvInvariantInput): string[] {
+  const errors: string[] = [];
+
+  // setupGracefulShutdown arms the force-exit timer *before* awaiting the drain
+  // delay, so a timeout at or below the delay makes every shutdown a forced
+  // exit(1) with no drain window at all.
+  if (cfg.SHUTDOWN_TIMEOUT_MS <= cfg.SHUTDOWN_DELAY_MS) {
+    errors.push(
+      `SHUTDOWN_TIMEOUT_MS (${cfg.SHUTDOWN_TIMEOUT_MS}) must exceed SHUTDOWN_DELAY_MS (${cfg.SHUTDOWN_DELAY_MS}) — the force-exit timer starts before the drain delay, so in-flight requests would get no drain window`,
+    );
+  }
+
+  if (cfg.DB_POOL_MAX < 1) {
+    errors.push(`DB_POOL_MAX (${cfg.DB_POOL_MAX}) must be at least 1`);
+  }
+
+  // pg silently accepts min > max and then never reaps down to it.
+  if (cfg.DB_POOL_MIN > cfg.DB_POOL_MAX) {
+    errors.push(
+      `DB_POOL_MIN (${cfg.DB_POOL_MIN}) must not exceed DB_POOL_MAX (${cfg.DB_POOL_MAX})`,
+    );
+  }
+
+  // Both secrets set to the same value reads as an in-progress rotation while
+  // verifying nothing the current secret doesn't already cover.
+  if (cfg.JWT_SECRET_PREVIOUS !== undefined && cfg.JWT_SECRET_PREVIOUS === cfg.JWT_SECRET) {
+    errors.push(
+      'JWT_SECRET_PREVIOUS must differ from JWT_SECRET (identical values hide an incomplete rotation)',
+    );
+  }
+
+  return errors;
+}
+
 export interface ProductionAssertionInput {
   NODE_ENV: string;
   METRICS_TOKEN?: string | undefined;
+  RESEND_API_KEY?: string | undefined;
+  MAIL_FROM?: string | undefined;
+  APP_BASE_URL?: string | undefined;
   DISABLE_RATE_LIMIT: boolean;
   DISABLE_RATE_LIMIT_PRODUCTION_CONFIRM: boolean;
   ENABLE_ECHO_ROUTES: boolean;
@@ -423,7 +500,27 @@ export function assertProductionEnv(cfg: ProductionAssertionInput): ProductionAs
     );
   }
 
+  // Without real mail configuration the app falls back to the log transport,
+  // which would silently drop every verification email — and since login is
+  // gated on verification, every new production account would be unusable with
+  // no error anywhere. Fail at boot instead.
+  if (!cfg.RESEND_API_KEY || !cfg.MAIL_FROM) {
+    errors.push(
+      'RESEND_API_KEY and MAIL_FROM are required in production (without them the mailer falls back to the log transport and no user can ever verify their address)',
+    );
+  }
+  if (!cfg.APP_BASE_URL || cfg.APP_BASE_URL.startsWith('http://localhost')) {
+    errors.push(
+      'APP_BASE_URL must be the real public origin in production (verification links are built from it)',
+    );
+  }
+
   return { errors, warnings };
+}
+
+const invariantErrors = assertEnvInvariants(env);
+if (invariantErrors.length > 0) {
+  throw new Error(`Invalid configuration:\n  - ${invariantErrors.join('\n  - ')}`);
 }
 
 const { errors: prodErrors, warnings: prodWarnings } = assertProductionEnv(env);

@@ -91,14 +91,24 @@ export const UserService: UserServiceInterface = {
   async create({ email, password }) {
     const hashedPassword = await bcrypt.hash(password, SALT_ROUNDS);
     const normalized = normalizeEmail(email);
-    const user = await prisma.user.create({
-      data: {
-        // email stores ciphertext; emailHash is the deterministic lookup key.
-        email: encryptField(normalized),
-        emailHash: blindIndex(normalized),
-        password: hashedPassword,
-      },
-    });
+    // Translate P2002 here rather than letting the raw Prisma error reach the
+    // error handler: the registration flow has to branch on "already taken"
+    // without leaking it, so it needs a typed error to catch. Callers that let
+    // it propagate still get the same 409 DUPLICATE_EMAIL response.
+    let user;
+    try {
+      user = await prisma.user.create({
+        data: {
+          // email stores ciphertext; emailHash is the deterministic lookup key.
+          email: encryptField(normalized),
+          emailHash: blindIndex(normalized),
+          password: hashedPassword,
+        },
+      });
+    } catch (err: unknown) {
+      if (isUniqueViolation(err)) throw new DuplicateEmailError();
+      throw err;
+    }
     // Hand callers the plaintext email — ciphertext stays at the DB layer.
     // role is a String column narrowed to the UserRole domain (users_role_check).
     return { ...user, email: normalized, role: user.role as UserRole };
@@ -109,9 +119,18 @@ export const UserService: UserServiceInterface = {
     // then decrypt on read so callers still get the plaintext address.
     const user = await prisma.user.findUnique({
       where: { emailHash: blindIndex(email) },
-      select: { id: true, email: true, password: true },
+      select: { id: true, email: true, password: true, emailVerifiedAt: true },
     });
     return user ? { ...user, email: decryptField(user.email) } : null;
+  },
+
+  // Idempotent by construction: re-verifying an already-verified address just
+  // rewrites the timestamp, so a duplicate click is harmless.
+  async markEmailVerified(userId) {
+    await prisma.user.update({
+      where: { id: userId },
+      data: { emailVerifiedAt: new Date() },
+    });
   },
 
   async findById(userId) {
@@ -220,10 +239,11 @@ export const UserService: UserServiceInterface = {
 
   async listUsers(params = {}) {
     // Cursor pagination mirrors TodoService.findByUser: over-fetch by one to
-    // detect hasMore, order by createdAt desc, cursor on id (skip the cursor row).
+    // detect hasMore, order by (createdAt desc, id desc) so ties are stable,
+    // cursor on id (skip the cursor row).
     const limit = Math.min(params.limit ?? 20, 100);
     const users = await prisma.user.findMany({
-      orderBy: { createdAt: 'desc' },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       take: limit + 1,
       ...(params.cursor && { cursor: { id: params.cursor }, skip: 1 }),
       select: PROFILE_SELECT,

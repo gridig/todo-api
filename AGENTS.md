@@ -220,6 +220,9 @@ For the full testing guide (structure, helpers reference, writing tests, databas
    - Register: 2 requests per hour (per IP)
    - Login per (IP, email): 3 failed attempts per 15 minutes
    - Login per email: 30 attempts per hour (caps single-account brute-force regardless of source IP)
+   - Login per IP: 60 **failed** attempts per 15 minutes (bounds credential stuffing across many accounts from one source; the compound key above resets per email, so it cannot). Successes are not counted, so shared egress IPs are unaffected
+   - Data export (`/user/me/export`): 5 per hour, keyed by **user** rather than IP — the endpoint loads a full todo history, so repeat calls are the cost
+   - Email verification: redemption 30 per 15 minutes (per IP); resend 3 per hour keyed by the **blind index of the address**, since abuse here costs someone else's inbox and our sender reputation
    - Read operations: 100 per minute (per IP)
    - Write operations: 30 per minute (per IP; includes `/auth/logout-all`)
    - Refresh-token operations (`/auth/refresh`, `/auth/logout`): 60 per 15 minutes (per IP)
@@ -231,7 +234,7 @@ For the full testing guide (structure, helpers reference, writing tests, databas
 
 - All inputs validated with Joi schemas before processing
 - Validation middleware strips unknown fields (`stripUnknown: true`)
-- Email: max 72 characters, valid format
+- Email: max 254 characters (RFC 5321 ceiling), valid format. Ownership is proven via a single-use emailed token before the account can log in
 - Password: 8-72 characters, must contain uppercase, lowercase, number, special character
 - Todo text: 1-500 characters, trimmed
 

@@ -1,5 +1,4 @@
 import request from 'supertest';
-import jwt from 'jsonwebtoken';
 import {
   createTestApp,
   connectTestDB,
@@ -7,6 +6,7 @@ import {
   cleanupTestData,
   truncateAuditEntries,
   pollForAuditRow,
+  registerVerifyAndLogin,
 } from '../../helpers/testSetup.js';
 
 const app = createTestApp();
@@ -22,10 +22,8 @@ async function registerUser(): Promise<{
   email: string;
 }> {
   const email = `pwchange-${Date.now()}-${Math.round(Math.random() * 1e6)}@example.com`;
-  const res = await request(app).post('/auth/register').send({ email, password: PASSWORD });
-  expect(res.status).toBe(201);
-  const userId = (jwt.decode(res.body.token) as jwt.JwtPayload).sub as string;
-  return { token: res.body.token, refreshToken: res.body.refreshToken, userId, email };
+  const session = await registerVerifyAndLogin(app, email, PASSWORD);
+  return { ...session, email };
 }
 
 beforeAll(async () => {

@@ -265,6 +265,27 @@ describe('Error Handler Middleware', () => {
       );
     });
 
+    // Transient write conflict inside an interactive transaction. Previously
+    // unmapped, so a retryable condition surfaced as a non-retryable 500.
+    it('maps P2034 transaction write conflict to 503 with short Retry-After: 5', () => {
+      const error = new Error('Transaction failed due to a write conflict') as PrismaError;
+      error.code = 'P2034';
+
+      errorHandler(error, req, res, next);
+
+      expect(res.setHeader).toHaveBeenCalledWith('Retry-After', '5');
+      expect(res.status).toHaveBeenCalledWith(503);
+      expect(res.json).toHaveBeenCalledWith(
+        expect.objectContaining({
+          error: expect.objectContaining({
+            code: 'DATABASE_UNAVAILABLE',
+            message: 'Transaction conflict, please retry',
+            details: expect.objectContaining({ retryable: true }),
+          }),
+        }),
+      );
+    });
+
     it('maps P2003 foreign-key violation to 409 ConflictError', () => {
       const error = new Error('FK constraint') as PrismaError;
       error.code = 'P2003';

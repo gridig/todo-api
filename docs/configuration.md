@@ -286,6 +286,25 @@ node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 
 Store the value in your secrets manager (see the **Secrets Management** section of [`ROADMAP.md`](../ROADMAP.md)) and inject it into the runtime — never commit it to `.env`.
 
+### Email Verification & Outbound Mail
+
+| Variable                          | Type   | Default                 | Description                                                                                                                                |
+| --------------------------------- | ------ | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `RESEND_API_KEY`                  | String | _(unset)_               | Resend API key. **Required in production.** Unset selects the dev log transport, which prints the verification link instead of sending it. |
+| `MAIL_FROM`                       | String | _(unset)_               | From address, e.g. `Todo API <noreply@example.com>`. **Required in production.**                                                           |
+| `APP_BASE_URL`                    | String | `http://localhost:3000` | Public origin of the frontend; verification links are `<APP_BASE_URL>/verify-email?token=…`. Must not be localhost in production.          |
+| `VERIFICATION_TOKEN_EXPIRY_HOURS` | Number | `24`                    | Verification link lifetime. Single use; issuing a new token invalidates any outstanding one for that account.                              |
+
+Production refuses to boot without `RESEND_API_KEY`, `MAIL_FROM`, and a non-localhost
+`APP_BASE_URL`. That is deliberate: login is gated on verification, so a silent fallback to the log
+transport would leave every new production account permanently unusable with nothing failing in the
+request path. Watch `verification_email_failures_total` — a sustained non-zero rate means users are
+signing up and never receiving a link.
+
+Mail is sent through the `Mailer` interface in `src/lib/mailer.ts`, not a vendor SDK — the Resend
+adapter is a single `fetch` POST, so swapping to SES/SMTP is a new adapter plus one line in
+`createMailer()`, with no route or model changes.
+
 ### Rate Limiting
 
 | Variable                                | Type    | Default | Description                                                                                                                                                                                                                   |
@@ -293,7 +312,11 @@ Store the value in your secrets manager (see the **Secrets Management** section 
 | `DISABLE_RATE_LIMIT`                    | Boolean | `false` | Disables all rate limiters. Use when running load tests/benchmarks. In production, must be paired with `DISABLE_RATE_LIMIT_PRODUCTION_CONFIRM=true` — startup aborts otherwise; with both set, startup logs a loud `WARNING`. |
 | `DISABLE_RATE_LIMIT_PRODUCTION_CONFIRM` | Boolean | `false` | Confirmation flag required to set `DISABLE_RATE_LIMIT=true` in production. Both must be `true`; either alone fails startup. Intended only for dedicated benchmark processes that serve no real traffic.                       |
 
-All rate limiters (`auth`, `login-email`, `write`, `read`, `global`, `register`, `health`, `refresh`) emit the IETF `draft-7` `RateLimit-*` response headers (`RateLimit-Limit`, `RateLimit-Remaining`, `RateLimit-Reset`, and `Retry-After` on 429s). Legacy `X-RateLimit-*` headers are not emitted.
+All rate limiters (`auth`, `login-email`, `login-ip`, `write`, `read`, `global`, `register`, `health`, `refresh`, `user-export`) emit the IETF `draft-7` `RateLimit-*` response headers (`RateLimit-Limit`, `RateLimit-Remaining`, `RateLimit-Reset`, and `Retry-After` on 429s). Legacy `X-RateLimit-*` headers are not emitted.
+
+`/user/me/export` is rate-limited at **5 requests/hour/user** (`exportLimiter`) rather than by the generic read cap: it loads the caller's full todo history into memory, so the cost is in replaying the request, not in any single response. It is keyed by `req.userId` so the bound follows the account whose data is read.
+
+`login-ip` caps **failed** logins at 60 per 15 minutes per IP. It layers under the compound `(ip, email)` limiter, which resets its budget for each new target email and therefore cannot bound credential stuffing spread across many accounts from a single source. Successful logins are not counted, so shared egress (corporate NAT, mobile CGNAT) is unaffected. Note that without `REDIS_URL` this cap is per-instance.
 
 The `/health/ready` endpoint is rate-limited at **60 requests/minute/IP** (`healthLimiter`). This is generous enough for typical ALB/K8s probes (5–30s intervals) but blocks abuse of the `SELECT 1` round-trip against the database.
 

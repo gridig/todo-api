@@ -4,7 +4,9 @@ import { env } from '../config/env.js';
 import type { JWTPayload } from '../types/index.js';
 
 const REFRESH_TOKEN_BYTES = 32;
+const VERIFICATION_TOKEN_BYTES = 32;
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
+const MS_PER_HOUR = 60 * 60 * 1000;
 
 // Candidate verify secrets, current first. JWT_SECRET_PREVIOUS is present only
 // during a rotation window so tokens signed before the cutover keep verifying
@@ -79,4 +81,22 @@ export function generateRefreshToken(): { raw: string; hash: string } {
 // single timestamp across the rotate (revoke-old + issue-new) pair.
 export function refreshTokenExpiry(from: Date = new Date()): Date {
   return new Date(from.getTime() + env.REFRESH_TOKEN_EXPIRY_DAYS * MS_PER_DAY);
+}
+
+// Email-verification tokens use the same construction as refresh tokens — 256
+// bits of entropy, unkeyed SHA-256 at rest — because they carry the same
+// property: a high-entropy bearer secret with nothing to brute-force. They are
+// deliberately NOT refresh tokens: shorter lived, single use, and redeeming one
+// grants no session.
+export function hashVerificationToken(raw: string): string {
+  return crypto.createHash('sha256').update(raw).digest('hex');
+}
+
+export function generateVerificationToken(): { raw: string; hash: string } {
+  const raw = crypto.randomBytes(VERIFICATION_TOKEN_BYTES).toString('base64url');
+  return { raw, hash: hashVerificationToken(raw) };
+}
+
+export function verificationTokenExpiry(from: Date = new Date()): Date {
+  return new Date(from.getTime() + env.VERIFICATION_TOKEN_EXPIRY_HOURS * MS_PER_HOUR);
 }

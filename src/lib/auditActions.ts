@@ -10,6 +10,13 @@ export const AuditAction = {
   // token theft, triggering revocation of the user's entire token set.
   AuthRefreshReuse: 'auth.refresh.reuse',
 
+  // Email-verification lifecycle. Sent covers both the registration mail and
+  // resends; verify records the redemption (success) or a bad/expired/reused
+  // token (failure). A login refused for an unverified address is recorded as
+  // an auth.login failure with outcomeReason 'email-not-verified'.
+  AuthEmailVerificationSent: 'auth.email.verification.sent',
+  AuthEmailVerify: 'auth.email.verify',
+
   AccessDenied: 'access.denied',
 
   // Self-service profile lifecycle (routes/user.ts).

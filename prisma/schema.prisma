@@ -39,10 +39,15 @@ model User {
   // diff` (schema-to-schema) never sees it. App-side domain: UserRole union.
   role       String   @default("user")
   password   String
+  // Null until the address is proven via POST /auth/verify. Login refuses to
+  // issue tokens while this is null, so an unverified account is inert. Rows
+  // that predate the control were backfilled as verified by the migration.
+  emailVerifiedAt DateTime? @map("email_verified_at") @db.Timestamptz
   createdAt  DateTime @default(now()) @map("created_at")
   updatedAt  DateTime @updatedAt @map("updated_at")
   todos      Todo[]
   refreshTokens RefreshToken[]
+  emailVerificationTokens EmailVerificationToken[]
 
   // Backs the admin user listing (ORDER BY created_at DESC, cursor on id).
   @@index([createdAt])
@@ -70,6 +75,25 @@ model RefreshToken {
   @@index([userId])
   @@index([expiresAt])
   @@map("refresh_tokens")
+}
+
+model EmailVerificationToken {
+  id         String    @id @default(uuid()) @db.Uuid
+  // SHA-256 hex of the opaque token. The raw value (256 bits of entropy) goes
+  // out in the emailed link and is never stored, so a DB leak cannot be
+  // replayed to verify someone else's address.
+  tokenHash  String    @unique @map("token_hash")
+  userId     String    @map("user_id") @db.Uuid
+  expiresAt  DateTime  @map("expires_at") @db.Timestamptz
+  createdAt  DateTime  @default(now()) @map("created_at")
+  // Single use. Set when redeemed; a second presentation of the same token is
+  // rejected rather than re-verifying.
+  consumedAt DateTime? @map("consumed_at") @db.Timestamptz
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("email_verification_tokens")
 }
 
 model AuditEntry {

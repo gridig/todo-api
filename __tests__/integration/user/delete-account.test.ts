@@ -1,6 +1,5 @@
 import request from 'supertest';
 import { jest } from '@jest/globals';
-import jwt from 'jsonwebtoken';
 import prisma from '@/lib/prisma.js';
 import auditLog from '@/lib/auditLog.js';
 import TodoService from '@/models/Todo.js';
@@ -11,6 +10,7 @@ import {
   cleanupTestData,
   truncateAuditEntries,
   pollForAuditRow,
+  registerVerifyAndLogin,
 } from '../../helpers/testSetup.js';
 
 const app = createTestApp();
@@ -19,10 +19,7 @@ const PASSWORD = 'TestPass123!';
 
 async function registerUser(): Promise<{ token: string; refreshToken: string; userId: string }> {
   const email = `delete-${Date.now()}-${Math.round(Math.random() * 1e6)}@example.com`;
-  const res = await request(app).post('/auth/register').send({ email, password: PASSWORD });
-  expect(res.status).toBe(201);
-  const userId = (jwt.decode(res.body.token) as jwt.JwtPayload).sub as string;
-  return { token: res.body.token, refreshToken: res.body.refreshToken, userId };
+  return registerVerifyAndLogin(app, email, PASSWORD);
 }
 
 beforeAll(async () => {

@@ -19,24 +19,78 @@ Base URL: `http://localhost:3001`
 }
 ```
 
-**Response** (201 Created):
+**Response** (202 Accepted):
 
 ```json
 {
-  "token": "<access-token-jwt>",
-  "refreshToken": "<refresh-token>"
+  "message": "If that address can be registered, a verification email has been sent."
 }
 ```
 
-- `token` — short-lived access token (default 15m). Send as `Authorization: Bearer <token>`.
-- `refreshToken` — opaque long-lived token (default 30 days). Store it securely and exchange it at
-  `POST /auth/refresh` for a new access token when the access token expires. Returned **once** — only
-  a hash is stored server-side.
+Registration returns **no tokens**. The account is inert until the address is verified via
+`POST /auth/verify`; log in afterwards to obtain a session.
+
+The response is **byte-identical** whether or not the address was already registered — that is
+deliberate. A distinguishable duplicate-email error is an account-existence oracle, which would undo
+the anti-enumeration measures on login. A second registration for an existing address changes
+nothing about that account (no password reset, no re-send).
 
 **Validation Rules**:
 
-- Email: Valid format, max 72 characters
+- Email: Valid format, max 254 characters (RFC 5321 ceiling)
 - Password: 8-72 characters, must contain uppercase, lowercase, number, and special character
+
+---
+
+### Verify Email Address
+
+**POST** `/auth/verify`
+
+**Rate Limit**: 30 requests per 15 minutes (per IP)
+
+**Request Body**:
+
+```json
+{
+  "token": "<token-from-the-emailed-link>"
+}
+```
+
+**Response** (200 OK):
+
+```json
+{
+  "message": "Email verified. You can now log in."
+}
+```
+
+The token is single-use and expires after `VERIFICATION_TOKEN_EXPIRY_HOURS` (default 24). Issuing a
+new one (via resend) invalidates any outstanding token for that account.
+
+**Errors**: `400 VERIFICATION_TOKEN_INVALID`, `400 VERIFICATION_TOKEN_EXPIRED`,
+`400 VERIFICATION_TOKEN_USED`. These are distinguished because the client can act differently on
+each; reaching any of them requires already holding a 256-bit token value, so the distinction leaks
+nothing about accounts.
+
+---
+
+### Resend Verification Email
+
+**POST** `/auth/resend-verification`
+
+**Rate Limit**: 3 requests per hour (per email address)
+
+**Request Body**:
+
+```json
+{
+  "email": "user@example.com"
+}
+```
+
+**Response** (202 Accepted) — the same body as `POST /auth/register`, for the same reason: a
+per-address response would reopen the enumeration oracle from a different endpoint. Nothing is sent
+for an unknown address or one that is already verified.
 
 ---
 
@@ -44,7 +98,9 @@ Base URL: `http://localhost:3001`
 
 **POST** `/auth/login`
 
-**Rate Limit**: 3 failed attempts per 15 minutes (per IP + email), plus 30 attempts per hour per email regardless of source IP
+**Rate Limit**: 3 failed attempts per 15 minutes (per IP + email), plus 30 attempts per hour per email regardless of source IP, plus 60 failed attempts per 15 minutes per IP across all accounts
+
+**Requires a verified address.** A correct password on an unverified account returns `403 EMAIL_NOT_VERIFIED` — checked _after_ the password comparison, so it tells an attacker nothing they could not already confirm.
 
 **Request Body**:
 
@@ -402,7 +458,7 @@ token). The email is re-encrypted at rest and its blind index rotated.
 
 **Validation Rules**:
 
-- `email`: valid email, max 72 characters (required)
+- `email`: valid email, max 254 characters (required)
 - `currentPassword`: required
 
 **Errors**: `400 VALIDATION_ERROR` (missing email/password), `401 INVALID_CREDENTIALS` (wrong current
@@ -471,7 +527,7 @@ cascade-deleted; the deletion is recorded in the audit log (which is retained).
 
 **GET** `/user/me/export`
 
-**Rate Limit**: 100 requests per minute
+**Rate Limit**: 5 requests per hour, keyed by user (not IP)
 
 Returns the full profile plus every todo as a downloadable JSON attachment (data portability). The
 access is recorded in the audit log.
@@ -932,38 +988,43 @@ All error responses follow a structured format with error codes for client-side 
 
 ### Error Codes Reference
 
-| Code                     | HTTP Status | Description                                                             |
-| ------------------------ | ----------- | ----------------------------------------------------------------------- |
-| `INVALID_CREDENTIALS`    | 401         | Wrong email or password                                                 |
-| `NO_TOKEN`               | 401         | No authentication token provided                                        |
-| `INVALID_TOKEN`          | 401         | Token is invalid or expired                                             |
-| `TODO_NOT_FOUND`         | 404         | Todo does not exist or belongs to another user                          |
-| `USER_NOT_FOUND`         | 404         | Authenticated user's account no longer exists                           |
-| `FORBIDDEN`              | 403         | Authenticated but not authorized (e.g. admin role required)             |
-| `ROUTE_NOT_FOUND`        | 404         | API endpoint does not exist                                             |
-| `DUPLICATE_EMAIL`        | 409         | Email already registered                                                |
-| `DUPLICATE_VALUE`        | 409         | Unique constraint violation                                             |
-| `VALIDATION_ERROR`       | 400         | Request failed Joi validation (`details.fields` lists per-field errors) |
-| `INVALID_ID_FORMAT`      | 400         | Invalid UUID format                                                     |
-| `INVALID_JSON`           | 400         | Request body contains invalid JSON                                      |
-| `PAYLOAD_TOO_LARGE`      | 413         | Request body exceeds the configured `BODY_LIMIT` (default 16kb)         |
-| `FOREIGN_KEY_CONSTRAINT` | 409.        | Foreign-key constraint violation                                        |
-| `SERVICE_UNAVAILABLE`    | 503         | Generic transient unavailability — retry with `Retry-After`             |
-| `DATABASE_UNAVAILABLE`   | 503         | Database unreachable or pool exhausted — retry with `Retry-After`       |
-| `INTERNAL_ERROR`         | 500         | Unexpected server error                                                 |
+| Code                         | HTTP Status | Description                                                             |
+| ---------------------------- | ----------- | ----------------------------------------------------------------------- |
+| `INVALID_CREDENTIALS`        | 401         | Wrong email or password                                                 |
+| `NO_TOKEN`                   | 401         | No authentication token provided                                        |
+| `INVALID_TOKEN`              | 401         | Token is invalid or expired                                             |
+| `TODO_NOT_FOUND`             | 404         | Todo does not exist or belongs to another user                          |
+| `USER_NOT_FOUND`             | 404         | Authenticated user's account no longer exists                           |
+| `FORBIDDEN`                  | 403         | Authenticated but not authorized (e.g. admin role required)             |
+| `EMAIL_NOT_VERIFIED`         | 403         | Correct credentials, but the address has not been verified              |
+| `VERIFICATION_TOKEN_INVALID` | 400         | Verification link is not valid                                          |
+| `VERIFICATION_TOKEN_EXPIRED` | 400         | Verification link expired                                               |
+| `VERIFICATION_TOKEN_USED`    | 400         | Verification link was already redeemed                                  |
+| `ROUTE_NOT_FOUND`            | 404         | API endpoint does not exist                                             |
+| `DUPLICATE_EMAIL`            | 409         | Email already registered                                                |
+| `DUPLICATE_VALUE`            | 409         | Unique constraint violation                                             |
+| `VALIDATION_ERROR`           | 400         | Request failed Joi validation (`details.fields` lists per-field errors) |
+| `INVALID_ID_FORMAT`          | 400         | Invalid UUID format                                                     |
+| `INVALID_JSON`               | 400         | Request body contains invalid JSON                                      |
+| `PAYLOAD_TOO_LARGE`          | 413         | Request body exceeds the configured `BODY_LIMIT` (default 16kb)         |
+| `FOREIGN_KEY_CONSTRAINT`     | 409         | Foreign-key constraint violation                                        |
+| `SERVICE_UNAVAILABLE`        | 503         | Generic transient unavailability — retry with `Retry-After`             |
+| `DATABASE_UNAVAILABLE`       | 503         | Database unreachable or pool exhausted — retry with `Retry-After`       |
+| `INTERNAL_ERROR`             | 500         | Unexpected server error                                                 |
 
 ### Status Codes
 
-| Code    | Meaning               | Usage                                     |
-| ------- | --------------------- | ----------------------------------------- |
-| **200** | OK                    | Successful GET, PATCH requests            |
-| **201** | Created               | Successful POST (resource created)        |
-| **204** | No Content            | Successful DELETE                         |
-| **400** | Bad Request           | Validation errors, invalid data           |
-| **401** | Unauthorized          | Invalid/missing token, wrong credentials  |
-| **404** | Not Found             | Resource doesn't exist                    |
-| **409** | Conflict              | Unique constraint violation               |
-| **413** | Payload Too Large     | Request body exceeds `BODY_LIMIT`         |
-| **429** | Too Many Requests     | Rate limit exceeded                       |
-| **500** | Internal Server Error | Server-side errors (not retryable)        |
-| **503** | Service Unavailable   | Database unavailable, health check failed |
+| Code    | Meaning               | Usage                                           |
+| ------- | --------------------- | ----------------------------------------------- |
+| **200** | OK                    | Successful GET, PATCH requests                  |
+| **201** | Created               | Successful POST (resource created)              |
+| **204** | No Content            | Successful DELETE                               |
+| **400** | Bad Request           | Validation errors, invalid data                 |
+| **401** | Unauthorized          | Invalid/missing token, wrong credentials        |
+| **403** | Forbidden             | Authenticated but not authorized (admin routes) |
+| **404** | Not Found             | Resource doesn't exist                          |
+| **409** | Conflict              | Unique constraint violation                     |
+| **413** | Payload Too Large     | Request body exceeds `BODY_LIMIT`               |
+| **429** | Too Many Requests     | Rate limit exceeded                             |
+| **500** | Internal Server Error | Server-side errors (not retryable)              |
+| **503** | Service Unavailable   | Database unavailable, health check failed       |

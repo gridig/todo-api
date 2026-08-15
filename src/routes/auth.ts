@@ -2,18 +2,30 @@ import express, { Response, Router } from 'express';
 import type { Logger } from 'pino';
 import UserService, { DUMMY_PASSWORD_HASH } from '../models/User.js';
 import RefreshTokenService from '../models/RefreshToken.js';
+import EmailVerificationTokenService from '../models/EmailVerificationToken.js';
 import { signAccessToken } from '../lib/tokens.js';
 import { blindIndex } from '../lib/crypto/fieldCrypto.js';
+import { mailer, verificationUrl } from '../lib/mailer.js';
+import { verificationEmailFailuresTotal } from '../middleware/metrics.js';
 import {
   authLimiter,
   loginEmailLimiter,
+  loginIpLimiter,
   registerLimiter,
   refreshLimiter,
+  resendVerificationLimiter,
+  verifyEmailLimiter,
   writeLimiter,
 } from '../middleware/rateLimiter.js';
 import { validate, schemas } from '../middleware/validation.js';
 import { auth, requireUserId } from '../middleware/auth.js';
-import { InvalidCredentialsError, InvalidTokenError } from '../errors/index.js';
+import {
+  DuplicateEmailError,
+  EmailNotVerifiedError,
+  InvalidCredentialsError,
+  InvalidTokenError,
+  InvalidVerificationTokenError,
+} from '../errors/index.js';
 import { writeOrLog } from '../lib/auditLog.js';
 import { AuditAction } from '../lib/auditActions.js';
 import prisma from '../lib/prisma.js';
@@ -55,6 +67,41 @@ async function revokeAllAndAuditReuse(userId: string, log: Logger): Promise<void
 
 const router: Router = express.Router();
 
+// Identical for a fresh address and one that is already registered. Register no
+// longer returns tokens: an account is inert until POST /auth/verify redeems the
+// emailed token, which is what removes the account-existence oracle (SCRUTINY.md
+// M3) and stops an attacker squatting someone else's address.
+const REGISTRATION_ACCEPTED = {
+  message: 'If that address can be registered, a verification email has been sent.',
+} as const;
+
+// Issue a single-use token and dispatch the mail. The send is fire-and-forget on
+// purpose: awaiting a third-party HTTP call would make the "new address" branch
+// measurably slower than the "already registered" branch and hand back the
+// timing oracle we just closed. Failures are logged and counted, never surfaced.
+async function sendVerification(userId: string, email: string, log: Logger): Promise<void> {
+  const rawToken = await EmailVerificationTokenService.issue(userId);
+
+  void mailer
+    .sendVerificationEmail({ to: email, verifyUrl: verificationUrl(rawToken) })
+    .catch((err: unknown) => {
+      verificationEmailFailuresTotal.inc();
+      log.error({ err, userId }, 'Verification email failed to send');
+    });
+
+  void writeOrLog(
+    prisma,
+    {
+      action: AuditAction.AuthEmailVerificationSent,
+      outcome: 'success',
+      entityType: 'User',
+      entityId: userId,
+      changedBy: userId,
+    },
+    log,
+  );
+}
+
 router.post(
   '/register',
   registerLimiter,
@@ -63,32 +110,111 @@ router.post(
     const { log } = req as RequestWithLogger;
     const { email, password } = req.body as RegisterRequest;
 
-    const user = await UserService.create({ email, password });
-    const token = signAccessToken(user.id);
-    const refreshToken = await RefreshTokenService.issue(user.id);
+    // The duplicate branch still pays the bcrypt cost inside UserService.create
+    // before the insert fails, so both paths do the same dominant work.
+    let user: Awaited<ReturnType<typeof UserService.create>> | null = null;
+    try {
+      user = await UserService.create({ email, password });
+    } catch (err: unknown) {
+      if (!(err instanceof DuplicateEmailError)) throw err;
+      log.info('Registration attempted for an address that already exists');
+    }
 
-    log.info({ userId: user.id, email: user.email }, 'User registered successfully');
-    void writeOrLog(
-      prisma,
-      {
-        action: AuditAction.AuthRegister,
-        outcome: 'success',
-        entityType: 'User',
-        entityId: user.id,
-        changedBy: user.id,
-        // Store the blind-index hash, not the raw address: audit_entries JSONB is
-        // neither redacted (Pino redaction is log-only) nor encrypted, so a raw
-        // email here would be PII at rest. entityId already identifies the user.
-        newValue: { id: user.id, emailHash: hashEmail(user.email) },
-      },
-      log,
-    );
-    res.status(201).json({ token, refreshToken });
+    if (user) {
+      await sendVerification(user.id, user.email, log);
+      log.info({ userId: user.id }, 'User registered, verification email dispatched');
+      void writeOrLog(
+        prisma,
+        {
+          action: AuditAction.AuthRegister,
+          outcome: 'success',
+          entityType: 'User',
+          entityId: user.id,
+          changedBy: user.id,
+          // Store the blind-index hash, not the raw address: audit_entries JSONB is
+          // neither redacted (Pino redaction is log-only) nor encrypted, so a raw
+          // email here would be PII at rest. entityId already identifies the user.
+          newValue: { id: user.id, emailHash: hashEmail(user.email) },
+        },
+        log,
+      );
+    }
+
+    res.status(202).json(REGISTRATION_ACCEPTED);
   },
 );
 
+// Redeem a verification token. Distinguishing expired/already-used from invalid
+// is safe here and materially better UX — the token is 256-bit random, so the
+// distinction is only available to someone who already holds a real token.
+router.post(
+  '/verify',
+  verifyEmailLimiter,
+  validate(schemas.verifyEmail),
+  async (req, res: Response<AuthRouteResponse>): Promise<void> => {
+    const { log, id: requestId } = req as RequestWithLogger;
+    const { token } = req.body as { token: string };
+
+    const result = await EmailVerificationTokenService.verify(token);
+
+    if (result.status !== 'verified') {
+      log.warn({ reason: result.status }, 'Email verification failed');
+      void writeOrLog(
+        prisma,
+        {
+          action: AuditAction.AuthEmailVerify,
+          outcome: 'failure',
+          outcomeReason: result.status,
+        },
+        log,
+      );
+      const error = new InvalidVerificationTokenError(result.status);
+      res.status(error.statusCode).json({ ...error.toJSON(), requestId });
+      return;
+    }
+
+    log.info({ userId: result.userId }, 'Email address verified');
+    void writeOrLog(
+      prisma,
+      {
+        action: AuditAction.AuthEmailVerify,
+        outcome: 'success',
+        entityType: 'User',
+        entityId: result.userId,
+        changedBy: result.userId,
+      },
+      log,
+    );
+    res.status(200).json({ message: 'Email verified. You can now log in.' });
+  },
+);
+
+// Always 202 with the same body, for the same reason register is: a per-address
+// response would re-open the oracle from a different endpoint.
+router.post(
+  '/resend-verification',
+  resendVerificationLimiter,
+  validate(schemas.resendVerification),
+  async (req, res: Response<AuthRouteResponse>): Promise<void> => {
+    const { log } = req as RequestWithLogger;
+    const { email } = req.body as { email: string };
+
+    const user = await UserService.findByEmail(email);
+    // Verified accounts get nothing: re-sending would let anyone mail-bomb a
+    // known-good address, and there is nothing left to verify.
+    if (user && user.emailVerifiedAt === null) {
+      await sendVerification(user.id, user.email, log);
+    }
+
+    res.status(202).json(REGISTRATION_ACCEPTED);
+  },
+);
+
+// loginIpLimiter runs first: it is the cheap IP-only check, so stuffing traffic
+// is rejected before authLimiter's key generator spends an HMAC on the email.
 router.post(
   '/login',
+  loginIpLimiter,
   authLimiter,
   loginEmailLimiter,
   validate(schemas.login),
@@ -130,6 +256,29 @@ router.post(
         log,
       );
       const error = new InvalidCredentialsError();
+      res.status(error.statusCode).json({ ...error.toJSON(), requestId });
+      return;
+    }
+
+    // Gate on verification only AFTER the password check. Checking earlier
+    // would turn this into the enumeration oracle the register flow no longer
+    // is — as written, the distinct 403 is visible only to someone who already
+    // holds valid credentials for the account.
+    if (user.emailVerifiedAt === null) {
+      log.warn({ userId: user.id }, 'Login refused - email not verified');
+      void writeOrLog(
+        prisma,
+        {
+          action: AuditAction.AuthLogin,
+          outcome: 'failure',
+          outcomeReason: 'email-not-verified',
+          entityType: 'User',
+          entityId: user.id,
+          changedBy: user.id,
+        },
+        log,
+      );
+      const error = new EmailNotVerifiedError();
       res.status(error.statusCode).json({ ...error.toJSON(), requestId });
       return;
     }
