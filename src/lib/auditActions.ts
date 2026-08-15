@@ -22,6 +22,11 @@ export const AuditAction = {
   // Self-service profile lifecycle (routes/user.ts).
   UserUpdate: 'user.update',
   UserPasswordChange: 'user.password.change',
+  // Email change is a two-step flow: `requested` records the staged address
+  // (nothing has moved yet), `change` the redemption that actually moves the
+  // account. Both carry blind-index hashes, never raw addresses.
+  UserEmailChangeRequested: 'user.email.change.requested',
+  UserEmailChange: 'user.email.change',
   UserDelete: 'user.delete',
   UserExport: 'user.export',
 
@@ -29,6 +34,11 @@ export const AuditAction = {
   // audit failure rolls back the privileged action.
   AdminUserRoleChange: 'admin.user.role.change',
   AdminUserDelete: 'admin.user.delete',
+  // Operator marked an address verified out-of-band (scripts/verify-email.ts),
+  // bypassing the emailed token. Deliberately distinct from auth.email.verify so
+  // "the user proved this address" and "an operator asserted it" never blur
+  // together in an access review.
+  AdminUserEmailVerify: 'admin.user.email.verify',
 
   TodoCreate: 'todo.create',
   TodoUpdate: 'todo.update',

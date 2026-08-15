@@ -247,7 +247,7 @@ TimescaleDB is a Postgres extension, not a standalone time-series database. Ther
 │ Active conns     │ admin with reason │                    │
 ├──────────────────┼───────────────────┼────────────────────┤
 │ prom-client      │ Prisma $queryRaw  │ Pino logger        │
-│ /metrics endpt   │ audit_events tbl  │ req.log.*          │
+│ /metrics endpt   │ audit_entries tbl │ req.log.*          │
 │ Grafana dashbd   │ SQL queries       │ stdout/file        │
 └──────────────────┴───────────────────┴────────────────────┘
 ```
@@ -403,7 +403,7 @@ CREATE INDEX idx_audit_ip     ON audit_entries (source_ip,                 chang
 
 ```sql
 -- Drop chunks older than 1 year
-SELECT add_retention_policy('audit_events', INTERVAL '1 year');
+SELECT add_retention_policy('audit_entries', INTERVAL '1 year');
 ```
 
 For SOC 2, security events may need 3-year retention. Handle with two tables or a continuous aggregate that preserves summaries after the raw data is dropped.
@@ -530,18 +530,18 @@ The stable action vocabulary lives in `src/lib/auditActions.ts` as exported cons
 
 ### Failure Modes & Monitoring
 
-| Failure mode                                               | Detection                                                                                            | Response                                                                                                                      |
-| ---------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| Audit insert fails (constraint, connection)                | Mutation transaction rolls back; client gets 500                                                     | Prometheus counter `audit_write_failures_total` (label: `reason`); alert if rate > 0.1% over 5m                               |
-| TimescaleDB extension missing (e.g., wrong image deployed) | Migration fails at `CREATE EXTENSION timescaledb`                                                    | Deploy blocked; alert via CI                                                                                                  |
-| Hypertable chunk creation lag                              | `SELECT count(*) FROM timescaledb_information.chunks WHERE hypertable_name='audit_entries'` plateaus | Daily check job; alert if no new chunk in 8 days                                                                              |
-| Retention policy disabled / misconfigured                  | `SELECT * FROM timescaledb_information.jobs WHERE proc_name='policy_retention'` returns empty        | Daily check; alert if missing                                                                                                 |
-| REVOKE accidentally rolled back                            | Smoke probe attempts `UPDATE audit_entries SET ...` as `db_app` and expects 42501                    | Post-deploy job in [`.github/workflows/deploy.yml`](../.github/workflows/deploy.yml); fails the deploy if the UPDATE succeeds |
-| pgBackRest backup fails                                    | `pgbackrest info` exit code non-zero                                                                 | In-container scheduler writes Prometheus metrics; alert on stale `pgbackrest_last_full_backup_age_seconds` > 30h              |
-| WAL archive lag                                            | `pg_stat_archiver.last_failed_wal` non-null or `last_archived_time` stale                            | Alert if lag > 5 min (RPO budget)                                                                                             |
-| Bucket lifecycle policy drift                              | Periodic check against expected retention                                                            | Quarterly review during DR drill                                                                                              |
+| Failure mode                                               | Detection                                                                                                  | Response                                                                                                                                   |
+| ---------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| Audit insert fails (constraint, connection)                | Mutation transaction rolls back; client gets 500                                                           | Prometheus counter `audit_write_failures_total` (label: `reason`); alert if rate > 0.1% over 5m                                            |
+| TimescaleDB extension missing (e.g., wrong image deployed) | Migration fails at `CREATE EXTENSION timescaledb`                                                          | Deploy blocked; alert via CI                                                                                                               |
+| Hypertable chunk creation lag                              | `SELECT count(*) FROM timescaledb_information.chunks WHERE hypertable_name='audit_entries'` plateaus       | Daily check job; alert if no new chunk in 8 days                                                                                           |
+| Retention policy disabled / misconfigured                  | `SELECT * FROM timescaledb_information.jobs WHERE proc_name='policy_retention'` returns empty              | Daily check; alert if missing                                                                                                              |
+| REVOKE accidentally rolled back                            | Startup probe attempts `UPDATE audit_entries SET action='probe' WHERE FALSE` as `db_app` and expects 42501 | [`src/index.ts`](../src/index.ts) refuses to boot unless Postgres rejects it — the process never serves traffic with a mutable audit table |
+| pgBackRest backup fails                                    | `pgbackrest info` exit code non-zero                                                                       | In-container scheduler writes Prometheus metrics; alert on stale `pgbackrest_last_full_backup_age_seconds` > 30h                           |
+| WAL archive lag                                            | `pg_stat_archiver.last_failed_wal` non-null or `last_archived_time` stale                                  | Alert if lag > 5 min (RPO budget)                                                                                                          |
+| Bucket lifecycle policy drift                              | Periodic check against expected retention                                                                  | Quarterly review during DR drill                                                                                                           |
 
-The post-deploy REVOKE smoke probe is critical: an accidental `GRANT UPDATE` (e.g., from a bad migration) would silently restore mutability and invalidate the SOC 2 control. Fail-the-deploy is the only response that catches it before audit-tampering becomes possible.
+The REVOKE probe is critical: an accidental `GRANT UPDATE` (e.g., from a bad migration) would silently restore mutability and invalidate the SOC 2 control. It runs at **process startup** rather than as a post-deploy CI job, which is the stronger placement — it also catches a wrong `DATABASE_URL` (a superuser DSN) and any drift introduced outside a deploy, and refuse-to-boot means no request is ever served against a mutable audit table.
 
 ### Scale Planning
 
@@ -572,15 +572,16 @@ TimescaleDB + the role model + REVOKE provide layered immutability:
 
 ## Roadmap Placement
 
-1. **Current priority:** Fix high-priority correctness bugs
-2. **Security hardening:** Helmet, HSTS, body size limits (already planned)
-3. **Audit logging phase:** TimescaleDB
-   - Swap Postgres image to TimescaleDB
-   - Create `audit_events` hypertable
-   - Build audit middleware capturing security events
-   - Add retention and compression policies
-4. **Basic search:** `pg_trgm` migration + search route (interim, serves as ES fallback)
-5. **Multi-entity search phase:** Elasticsearch
+> This memo predates implementation. Steps 1–3 have shipped; [ROADMAP.md](../ROADMAP.md) is the live
+> plan, and this section is kept only to show the sequence the design assumed.
+
+1. ~~**Correctness bugs**~~ — shipped (see [runtime-correctness.md](runtime-correctness.md), historical)
+2. ~~**Security hardening:** Helmet, HSTS, body size limits~~ — shipped
+3. ~~**Audit logging phase:** TimescaleDB~~ — shipped: hypertable, `idx_audit_*` indexes, 1-year
+   retention policy, three-role model + append-only `REVOKE`, startup tamper probe. Compression is
+   still deferred (see **Scale Planning**)
+4. **Basic search:** `pg_trgm` migration + search route (interim, serves as ES fallback) — open
+5. **Multi-entity search phase:** Elasticsearch — open, gated on multi-entity content existing
    - Add ES to Docker Compose
    - Design unified search index with custom analyzers
    - Implement outbox-based sync from Postgres to ES
@@ -596,7 +597,7 @@ TimescaleDB + the role model + REVOKE provide layered immutability:
 │   Express   │────▶│  PostgreSQL + TimescaleDB     │     │  Redis  │
 │   API       │     │                               │     │         │
 │             │     │  ┌────────┐  ┌──────────────┐ │     │  Rate   │
-│  Todo CRUD ─┼────▶│  │  Todo  │  │ audit_events │ │     │  Limits │
+│  Todo CRUD ─┼────▶│  │  Todo  │  │audit_entries │ │     │  Limits │
 │             │     │  │ (table)│  │ (hypertable) │ │     │         │
 │  Audit MW ──┼────▶│  └────────┘  └──────────────┘ │     └─────────┘
 │             │     │                               │

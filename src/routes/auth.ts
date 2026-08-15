@@ -3,6 +3,7 @@ import type { Logger } from 'pino';
 import UserService, { DUMMY_PASSWORD_HASH } from '../models/User.js';
 import RefreshTokenService from '../models/RefreshToken.js';
 import EmailVerificationTokenService from '../models/EmailVerificationToken.js';
+import EmailChangeTokenService from '../models/EmailChangeToken.js';
 import { signAccessToken } from '../lib/tokens.js';
 import { blindIndex } from '../lib/crypto/fieldCrypto.js';
 import { mailer, verificationUrl } from '../lib/mailer.js';
@@ -69,8 +70,9 @@ const router: Router = express.Router();
 
 // Identical for a fresh address and one that is already registered. Register no
 // longer returns tokens: an account is inert until POST /auth/verify redeems the
-// emailed token, which is what removes the account-existence oracle (SCRUTINY.md
-// M3) and stops an attacker squatting someone else's address.
+// emailed token, which is what removes the account-existence oracle a
+// distinguishable duplicate-email error would reopen, and stops an attacker
+// squatting someone else's address.
 const REGISTRATION_ACCEPTED = {
   message: 'If that address can be registered, a verification email has been sent.',
 } as const;
@@ -189,6 +191,71 @@ router.post(
   },
 );
 
+// Redeem an email-change token. Unauthenticated by design: the link is opened
+// from the NEW inbox, which is very often a different device or browser than the
+// session that requested the change. The 256-bit single-use token bound to the
+// user is the credential here, and requiring a session on top of it would break
+// the common case without adding anything an attacker holding the token lacks.
+router.post(
+  '/verify-email-change',
+  verifyEmailLimiter,
+  validate(schemas.verifyEmail),
+  async (req, res: Response<AuthRouteResponse>): Promise<void> => {
+    const { log, id: requestId } = req as RequestWithLogger;
+    const { token } = req.body as { token: string };
+
+    const result = await EmailChangeTokenService.verify(token);
+
+    if (result.status !== 'changed') {
+      log.warn({ reason: result.status }, 'Email change verification failed');
+      void writeOrLog(
+        prisma,
+        {
+          action: AuditAction.UserEmailChange,
+          outcome: 'failure',
+          outcomeReason: result.status,
+        },
+        log,
+      );
+      // The address was claimed between request and redemption: a 409, not a
+      // 400 — the token was fine, the world changed underneath it.
+      const error =
+        result.status === 'email_taken'
+          ? new DuplicateEmailError()
+          : new InvalidVerificationTokenError(result.status);
+      res.status(error.statusCode).json({ ...error.toJSON(), requestId });
+      return;
+    }
+
+    // Best-effort notice to the address that just lost the account. Fire-and-
+    // forget: the change is already committed and durable, and a mail failure
+    // must not make the user think it didn't happen.
+    void mailer
+      .sendEmailChangedNotice({ to: result.previousEmail, newEmail: result.newEmail })
+      .catch((err: unknown) => {
+        verificationEmailFailuresTotal.inc();
+        log.error({ err, userId: result.userId }, 'Email-change notice failed to send');
+      });
+
+    log.info({ userId: result.userId }, 'Email address changed');
+    void writeOrLog(
+      prisma,
+      {
+        action: AuditAction.UserEmailChange,
+        outcome: 'success',
+        entityType: 'User',
+        entityId: result.userId,
+        changedBy: result.userId,
+        // Blind indexes only: audit_entries is not encrypted at rest.
+        previousValue: { emailHash: hashEmail(result.previousEmail) },
+        newValue: { emailHash: hashEmail(result.newEmail) },
+      },
+      log,
+    );
+    res.status(200).json({ message: 'Email address updated. Use it to log in from now on.' });
+  },
+);
+
 // Always 202 with the same body, for the same reason register is: a per-address
 // response would re-open the oracle from a different endpoint.
 router.post(
@@ -199,7 +266,9 @@ router.post(
     const { log } = req as RequestWithLogger;
     const { email } = req.body as { email: string };
 
-    const user = await UserService.findByEmail(email);
+    // Not findByEmail: this path never compares a password, so it has no reason
+    // to pull the bcrypt hash into memory.
+    const user = await UserService.findVerificationStateByEmail(email);
     // Verified accounts get nothing: re-sending would let anyone mail-bomb a
     // known-good address, and there is nothing left to verify.
     if (user && user.emailVerifiedAt === null) {

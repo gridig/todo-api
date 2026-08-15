@@ -94,6 +94,48 @@ for an unknown address or one that is already verified.
 
 ---
 
+### Confirm an Email Change
+
+**POST** `/auth/verify-email-change`
+
+**Rate Limit**: 30 requests per 15 minutes (per IP — shares the `verify-email` budget)
+
+Redeems the token emailed to a **new** address by
+[`PATCH /user/me/email`](#change-email-request) and moves the account to it. Unauthenticated by
+design: the link is opened from the new inbox, which is usually a different device or browser than
+the session that requested the change. The single-use 256-bit token bound to the user is the
+credential.
+
+**Request Body**:
+
+```json
+{
+  "token": "<token-from-the-emailed-link>"
+}
+```
+
+**Response** (200 OK):
+
+```json
+{
+  "message": "Email address updated. Use it to log in from now on."
+}
+```
+
+On success the address is re-encrypted at rest, its blind index rotated, and the account marked
+verified. A notification is sent to the **previous** address — that mail is the only signal the
+prior owner gets if a change was made from a stolen session.
+
+**Errors**: `400 VERIFICATION_TOKEN_INVALID`, `400 VERIFICATION_TOKEN_EXPIRED`,
+`400 VERIFICATION_TOKEN_USED`, and `409 DUPLICATE_EMAIL` when the address was claimed by someone
+else between the request and the click — the token was valid, so it is a conflict rather than a
+validation failure. The token is consumed either way; start a new request.
+
+Signup tokens (`POST /auth/verify`) and change tokens live in separate tables and are not
+interchangeable — a token from one flow presented to the other returns `VERIFICATION_TOKEN_INVALID`.
+
+---
+
 ### Login
 
 **POST** `/auth/login`
@@ -260,7 +302,7 @@ Authorization: Bearer <your-token>
 }
 ```
 
-Todos are ordered by `createdAt` descending (newest first). When `hasMore` is `true`, pass `meta.nextCursor` as the `cursor` query parameter to fetch the next page.
+Todos are ordered by `createdAt` descending (newest first), with `id` descending as a tiebreaker. The tiebreaker is load-bearing for pagination, not cosmetic: `created_at` is `TIMESTAMP(3)`, so todos created in the same millisecond tie, and without a unique second sort key the order inside a tie group is undefined per query — a page boundary landing inside one would drop or repeat rows. When `hasMore` is `true`, pass `meta.nextCursor` as the `cursor` query parameter to fetch the next page.
 
 ---
 
@@ -436,14 +478,18 @@ re-authentication.)
 
 ---
 
-### Change Email
+### Change Email (request)
 
 **PATCH** `/user/me/email`
 
-**Rate Limit**: 30 requests per minute
+**Rate Limit**: 30 requests per minute, **and** 3 requests per hour per target address
 
-Changes the account email. **Requires the current password** (re-authentication against a stolen access
-token). The email is re-encrypted at rest and its blind index rotated.
+Starts an address change. **Requires the current password** (re-authentication against a stolen access
+token). The password proves who is asking; it proves nothing about the address being asked for — so
+this endpoint only _stages_ the change and emails a single-use link to the new address. The account
+keeps its current email until that link is redeemed at
+[`POST /auth/verify-email-change`](#confirm-an-email-change), which is what makes a mistyped address
+recoverable rather than an instant self-lockout.
 
 **Request Body**:
 
@@ -454,7 +500,18 @@ token). The email is re-encrypted at rest and its blind index rotated.
 }
 ```
 
-**Response** (200 OK): the updated profile.
+**Response** (202 Accepted):
+
+```json
+{
+  "message": "Check the new address for a confirmation link. Your current email is unchanged."
+}
+```
+
+The response is the same whether or not the requested address is already registered — an
+authenticated caller could otherwise walk addresses through this endpoint and read account existence
+off the status code. A token issued for a taken address simply never becomes usable: redemption
+re-checks and returns `409`.
 
 **Validation Rules**:
 
@@ -462,7 +519,7 @@ token). The email is re-encrypted at rest and its blind index rotated.
 - `currentPassword`: required
 
 **Errors**: `400 VALIDATION_ERROR` (missing email/password), `401 INVALID_CREDENTIALS` (wrong current
-password), `409 DUPLICATE_EMAIL` (email already in use).
+password).
 
 ---
 
@@ -583,7 +640,7 @@ admin API (use `/user/me` for self-service).
 
 **Auth**: `Authorization: Bearer <token>` (admin) · **Rate Limit**: 100 requests per minute
 
-**Query Parameters**: same as `GET /todos` — `limit` (1-100, default 20) and `cursor` (UUID).
+**Query Parameters**: same as `GET /todos` — `limit` (1-100, default 20) and `cursor` (UUID). Ordering is likewise `createdAt` descending with `id` descending as the tiebreaker, so page boundaries are stable across same-millisecond signups.
 
 **Response** (200 OK):
 
@@ -834,19 +891,20 @@ Content-Type: `text/plain; version=0.0.4; charset=utf-8`
 
 **Custom Application Metrics**:
 
-| Metric                            | Type      | Labels                           | Description                                                                  |
-| --------------------------------- | --------- | -------------------------------- | ---------------------------------------------------------------------------- |
-| `http_request_duration_seconds`   | Histogram | `method`, `route`, `status_code` | Duration of HTTP requests in seconds                                         |
-| `http_requests_total`             | Counter   | `method`, `route`, `status_code` | Total number of HTTP requests                                                |
-| `rate_limit_hits_total`           | Counter   | `limiter_type`                   | Total number of rate limit hits                                              |
-| `rate_limit_store_fallback_total` | Counter   | `limiter_type`                   | Rate-limit checks served by the in-memory fallback store (Redis unavailable) |
-| `db_query_duration_seconds`       | Histogram | `operation`, `model`             | Duration of database queries in seconds                                      |
-| `active_connections`              | Gauge     | --                               | Number of active HTTP connections                                            |
-| `audit_write_failures_total`      | Counter   | `reason`                         | Audit-log writes that failed outside a `$transaction` (auth events)          |
-| `db_pool_total_connections`       | Gauge     | --                               | Total connections currently held by the pool (idle + checked out)            |
-| `db_pool_idle_connections`        | Gauge     | --                               | Connections sitting idle in the pool                                         |
-| `db_pool_waiting_clients`         | Gauge     | --                               | Clients waiting for a connection because the pool is saturated               |
-| `db_pool_max_connections`         | Gauge     | --                               | Configured pool maximum (`DB_POOL_MAX`)                                      |
+| Metric                              | Type      | Labels                           | Description                                                                                                                                           |
+| ----------------------------------- | --------- | -------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `http_request_duration_seconds`     | Histogram | `method`, `route`, `status_code` | Duration of HTTP requests in seconds                                                                                                                  |
+| `http_requests_total`               | Counter   | `method`, `route`, `status_code` | Total number of HTTP requests                                                                                                                         |
+| `rate_limit_hits_total`             | Counter   | `limiter_type`                   | Total number of rate limit hits                                                                                                                       |
+| `rate_limit_store_fallback_total`   | Counter   | `limiter_type`                   | Rate-limit checks served by the in-memory fallback store (Redis unavailable)                                                                          |
+| `db_query_duration_seconds`         | Histogram | `operation`, `model`             | Duration of database queries in seconds                                                                                                               |
+| `active_connections`                | Gauge     | --                               | Number of active HTTP connections                                                                                                                     |
+| `audit_write_failures_total`        | Counter   | `reason`                         | Audit-log writes that failed outside a `$transaction` (auth events)                                                                                   |
+| `verification_email_failures_total` | Counter   | --                               | Outbound verification mail that failed to send — signup links, email-change confirmations, and change notices (affected users cannot finish the flow) |
+| `db_pool_total_connections`         | Gauge     | --                               | Total connections currently held by the pool (idle + checked out)                                                                                     |
+| `db_pool_idle_connections`          | Gauge     | --                               | Connections sitting idle in the pool                                                                                                                  |
+| `db_pool_waiting_clients`           | Gauge     | --                               | Clients waiting for a connection because the pool is saturated                                                                                        |
+| `db_pool_max_connections`           | Gauge     | --                               | Configured pool maximum (`DB_POOL_MAX`)                                                                                                               |
 
 **Default Node.js Metrics** (via `prom-client`):
 
@@ -984,7 +1042,7 @@ All error responses follow a structured format with error codes for client-side 
 }
 ```
 
-503 responses also carry a `Retry-After` header (seconds) — `30` for an unreachable database (`code: DATABASE_UNAVAILABLE`), `5` for transient pool-pressure errors. Errors with `"retryable": true` in the details are safe to retry with exponential backoff; respect `Retry-After` as the minimum wait. The `DATABASE_UNAVAILABLE` code is emitted when Prisma surfaces a transient connection error (codes P1001/P1002/P1008/P1017) or pool timeout (P2024).
+503 responses also carry a `Retry-After` header (seconds) — `30` for an unreachable database (`code: DATABASE_UNAVAILABLE`), `5` for transient pool-pressure errors. Errors with `"retryable": true` in the details are safe to retry with exponential backoff; respect `Retry-After` as the minimum wait. The `DATABASE_UNAVAILABLE` code is emitted when Prisma surfaces a transient connection error (codes P1001/P1002/P1008/P1017), a pool timeout (P2024), or a transaction write conflict / deadlock (P2034). P2034 is genuinely retryable — the same request typically succeeds on the next attempt — which is why it is a 503 with `Retry-After: 5` rather than a 500.
 
 ### Error Codes Reference
 
@@ -1014,17 +1072,18 @@ All error responses follow a structured format with error codes for client-side 
 
 ### Status Codes
 
-| Code    | Meaning               | Usage                                           |
-| ------- | --------------------- | ----------------------------------------------- |
-| **200** | OK                    | Successful GET, PATCH requests                  |
-| **201** | Created               | Successful POST (resource created)              |
-| **204** | No Content            | Successful DELETE                               |
-| **400** | Bad Request           | Validation errors, invalid data                 |
-| **401** | Unauthorized          | Invalid/missing token, wrong credentials        |
-| **403** | Forbidden             | Authenticated but not authorized (admin routes) |
-| **404** | Not Found             | Resource doesn't exist                          |
-| **409** | Conflict              | Unique constraint violation                     |
-| **413** | Payload Too Large     | Request body exceeds `BODY_LIMIT`               |
-| **429** | Too Many Requests     | Rate limit exceeded                             |
-| **500** | Internal Server Error | Server-side errors (not retryable)              |
-| **503** | Service Unavailable   | Database unavailable, health check failed       |
+| Code    | Meaning               | Usage                                                                            |
+| ------- | --------------------- | -------------------------------------------------------------------------------- |
+| **200** | OK                    | Successful GET, PATCH requests                                                   |
+| **201** | Created               | Successful POST (resource created)                                               |
+| **202** | Accepted              | Registration / resend accepted; verification email dispatched, no session issued |
+| **204** | No Content            | Successful DELETE                                                                |
+| **400** | Bad Request           | Validation errors, invalid data                                                  |
+| **401** | Unauthorized          | Invalid/missing token, wrong credentials                                         |
+| **403** | Forbidden             | Authenticated but not authorized (admin routes)                                  |
+| **404** | Not Found             | Resource doesn't exist                                                           |
+| **409** | Conflict              | Unique constraint violation                                                      |
+| **413** | Payload Too Large     | Request body exceeds `BODY_LIMIT`                                                |
+| **429** | Too Many Requests     | Rate limit exceeded                                                              |
+| **500** | Internal Server Error | Server-side errors (not retryable)                                               |
+| **503** | Service Unavailable   | Database unavailable, health check failed                                        |

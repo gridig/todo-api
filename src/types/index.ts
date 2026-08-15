@@ -30,6 +30,12 @@ export interface User {
 // omitted.
 export type UserLoginFields = Pick<User, 'id' | 'email' | 'password' | 'emailVerifiedAt'>;
 
+// What the resend-verification path needs: who to mail, and whether there is
+// anything left to verify. Deliberately excludes `password` — that hash is the
+// most sensitive field on the row and only the login comparison has a reason to
+// pull it into process memory.
+export type UserVerificationState = Pick<User, 'id' | 'email' | 'emailVerifiedAt'>;
+
 // Public profile shape returned by the /user/me and /admin/users endpoints —
 // never carries the password hash or emailHash. email is decrypted before it
 // reaches this type.
@@ -169,7 +175,10 @@ export interface UserServiceInterface {
   // Mark an address verified. Used by the verification redemption path and by
   // the test helpers that need a usable account without a mail round-trip.
   markEmailVerified(userId: string): Promise<void>;
+  // Login lookup — the only caller that legitimately needs the password hash.
   findByEmail(email: string): Promise<UserLoginFields | null>;
+  // Same blind-index lookup without the password hash, for the resend path.
+  findVerificationStateByEmail(email: string): Promise<UserVerificationState | null>;
   // Read a user's public profile by id (email decrypted); null if not found.
   findById(userId: string): Promise<UserProfile | null>;
   comparePassword(plainPassword: string, hashedPassword: string): Promise<boolean>;

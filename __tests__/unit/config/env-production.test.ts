@@ -19,6 +19,7 @@ const baseProdCfg = (overrides: Partial<Parameters<typeof assertProductionEnv>[0
   RESEND_API_KEY: 're_test_key',
   MAIL_FROM: 'Todo API <noreply@example.com>',
   APP_BASE_URL: 'https://app.example.com',
+  ALLOW_LOG_MAIL_TRANSPORT_PRODUCTION_CONFIRM: false,
   ...overrides,
 });
 
@@ -128,6 +129,50 @@ describe('assertProductionEnv', () => {
     expect(result.errors).toEqual(
       expect.arrayContaining([expect.stringMatching(/ENCRYPTION_BLIND_INDEX_KEY must be real/)]),
     );
+  });
+
+  it('errors when mail is unconfigured in production', () => {
+    const result = assertProductionEnv(baseProdCfg({ RESEND_API_KEY: undefined }));
+    expect(result.errors).toEqual(
+      expect.arrayContaining([expect.stringMatching(/RESEND_API_KEY and MAIL_FROM are required/)]),
+    );
+  });
+
+  it('errors when APP_BASE_URL is still localhost in production', () => {
+    const result = assertProductionEnv(baseProdCfg({ APP_BASE_URL: 'http://localhost:3000' }));
+    expect(result.errors).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(/APP_BASE_URL must be the real public origin/),
+      ]),
+    );
+  });
+
+  // The docker-compose / e2e shape: production mode, no mail vendor, link read
+  // from the log. Both mail checks relax together — a localhost APP_BASE_URL is
+  // the right link target when the transport is the log.
+  it('accepts unconfigured mail paired with the log-transport confirm flag (warning only)', () => {
+    const result = assertProductionEnv(
+      baseProdCfg({
+        RESEND_API_KEY: undefined,
+        MAIL_FROM: undefined,
+        APP_BASE_URL: 'http://localhost:3000',
+        ALLOW_LOG_MAIL_TRANSPORT_PRODUCTION_CONFIRM: true,
+      }),
+    );
+    expect(result.errors).toEqual([]);
+    expect(result.warnings).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(/ALLOW_LOG_MAIL_TRANSPORT_PRODUCTION_CONFIRM=true in production/),
+      ]),
+    );
+  });
+
+  it('does NOT warn when the confirm flag is set but mail is fully configured', () => {
+    const result = assertProductionEnv(
+      baseProdCfg({ ALLOW_LOG_MAIL_TRANSPORT_PRODUCTION_CONFIRM: true }),
+    );
+    expect(result.errors).toEqual([]);
+    expect(result.warnings).toEqual([]);
   });
 
   it('accumulates multiple errors in a single call', () => {

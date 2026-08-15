@@ -135,9 +135,8 @@ const limiterDefaults: Record<string, Partial<Options>> = {
   //
   // The cost is real and deliberate: because the email is in the key, rotating
   // the target mints a fresh 3-attempt bucket, so this limiter does NOT bound
-  // credential stuffing spread across many accounts from one IP — only the
-  // global limiter does, two orders of magnitude higher. A dedicated per-IP
-  // login cap is the missing layer; see SCRUTINY.md M4.
+  // credential stuffing spread across many accounts from one IP. The 'login-ip'
+  // limiter below is the layer that does.
   // ipKeyGenerator collapses IPv6 /64 prefixes so a single attacker can't
   // walk a /64 to defeat per-IP limits. Per express-rate-limit v8 docs, any
   // custom keyGenerator that incorporates req.ip MUST use this helper.
@@ -266,6 +265,19 @@ const limiterDefaults: Record<string, Partial<Options>> = {
     keyGenerator: loginEmailKey,
   },
 
+  // Requesting an email change sends mail to an address the requester chose, so
+  // the abuse shape is the same as resend-verification: a mail-bomb aimed at
+  // someone else's inbox. Keyed by the blind index of the *target* address for
+  // that reason — a per-user key would let one account spray many victims.
+  'email-change': {
+    windowMs: 60 * 60 * 1000,
+    max: 3,
+    message: {
+      error: 'Too many email change requests. Please try again later.',
+    },
+    keyGenerator: loginEmailKey,
+  },
+
   // Data export loads a user's entire history into memory and serializes it.
   // Under the generic read cap one account could replay that 100×/minute, so
   // the amplification — not any single response — is what needs bounding.
@@ -293,6 +305,7 @@ export const loginIpLimiter = buildLimiter('login-ip');
 export const exportLimiter = buildLimiter('user-export');
 export const verifyEmailLimiter = buildLimiter('verify-email');
 export const resendVerificationLimiter = buildLimiter('resend-verification');
+export const emailChangeLimiter = buildLimiter('email-change');
 export const writeLimiter = buildLimiter('write');
 export const readLimiter = buildLimiter('read');
 export const globalLimiter = buildLimiter('global');

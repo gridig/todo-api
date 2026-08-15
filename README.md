@@ -28,7 +28,7 @@ From a clean checkout, with Node.js 24+ and PostgreSQL available:
 
    The three roles (`db_admin`, `db_app`, `db_auditor`) are created by `prisma/sql/bootstrap_roles.sql`, which runs automatically the first time the Docker Compose Postgres volume initialises. See [`docs/configuration.md`](docs/configuration.md#database-roles) for the role model.
 
-   > **Note:** `.env.example` ships with `NODE_ENV=development` and dev placeholder keys so the quickstart boots as-is. Production deployments additionally require `METRICS_TOKEN` (32+ chars) and real `ENCRYPTION_*` keys — `NODE_ENV=production` enforces both at startup.
+   > **Note:** `.env.example` ships with `NODE_ENV=development` and dev placeholder keys so the quickstart boots as-is. Production deployments additionally require `METRICS_TOKEN` (32+ chars), real `ENCRYPTION_*` keys, and real mail config (`RESEND_API_KEY`, `MAIL_FROM`, a non-localhost `APP_BASE_URL`) — `NODE_ENV=production` enforces all of them at startup. Locally, mail falls back to a log transport that prints the verification link instead of sending it.
 
 3. **Create database and run migrations**
 
@@ -50,8 +50,28 @@ From a clean checkout, with Node.js 24+ and PostgreSQL available:
 ### Quick Start Example
 
 ```bash
-# Register a new user
+# 1. Register — returns 202 and NO tokens. The account is inert until its
+#    address is verified. The response is identical for an address that is
+#    already registered (no account-existence oracle).
 curl -X POST http://localhost:3001/auth/register \
+  -H "Content-Type: application/json" \
+  -d '{"email":"user@example.com","password":"SecurePass123!"}'
+
+# Response: {"message":"If that address can be registered, a verification email has been sent."}
+
+# 2. Verify. With RESEND_API_KEY unset (the local default) the mailer is the log
+#    transport: the link is printed to the server output instead of emailed.
+#    Copy the token out of <APP_BASE_URL>/verify-email?token=... and redeem it.
+curl -X POST http://localhost:3001/auth/verify \
+  -H "Content-Type: application/json" \
+  -d '{"token":"TOKEN_FROM_THE_LOGGED_LINK"}'
+
+# Response: {"message":"Email verified. You can now log in."}
+# Link expired or lost? POST /auth/resend-verification with {"email":"..."}.
+
+# 3. Log in — this is what issues tokens. Logging in before verifying returns
+#    403 EMAIL_NOT_VERIFIED even with the correct password.
+curl -X POST http://localhost:3001/auth/login \
   -H "Content-Type: application/json" \
   -d '{"email":"user@example.com","password":"SecurePass123!"}'
 
@@ -59,18 +79,13 @@ curl -X POST http://localhost:3001/auth/register \
 # The access token is short-lived (15m); use POST /auth/refresh with the
 # refreshToken to rotate it, and /auth/logout[-all] to revoke.
 
-# Login
-curl -X POST http://localhost:3001/auth/login \
-  -H "Content-Type: application/json" \
-  -d '{"email":"user@example.com","password":"SecurePass123!"}'
-
-# Create a todo (replace TOKEN with your JWT)
+# 4. Create a todo (replace TOKEN with the access token from login)
 curl -X POST http://localhost:3001/todos \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer TOKEN" \
   -d '{"text":"Buy groceries"}'
 
-# Get all todos
+# 5. Get all todos
 curl http://localhost:3001/todos \
   -H "Authorization: Bearer TOKEN"
 ```
@@ -110,6 +125,10 @@ curl http://localhost:3001/todos \
 │       ┌─────────┐    ┌─────────┐    ┌──────────────────┐        │
 │       │ User.ts │    │ Todo.ts │    │ RefreshToken.ts  │        │
 │       └─────────┘    └─────────┘    └──────────────────┘        │
+│       ┌────────────────────────────┐                            │
+│       │ EmailVerificationToken.ts  │  (single-use, hashed)      │
+│       │ EmailChangeToken.ts        │  (pending address)         │
+│       └────────────────────────────┘                            │
 └────────────────────────────────┬────────────────────────────────┘
                                  │
                         ┌────────▼────────┐
@@ -119,6 +138,7 @@ curl http://localhost:3001/todos \
 ┌────────────────────────────────▼────────────────────────────────┐
 │                     PostgreSQL (TimescaleDB)                    │
 │   users (email encrypted) · todos · refresh_tokens              │
+│   email_verification_tokens · email_change_tokens               │
 │   audit_entries hypertable:                                     │
 │     INSERT/SELECT for db_app · UPDATE/DELETE REVOKEd            │
 │     SELECT for db_auditor                                       │
@@ -129,6 +149,7 @@ Key Components:
 • Errors: Custom error classes (AppError, AuthError, ValidationError, ForbiddenError, UserNotFoundError, etc.)
 • Logging: Structured JSON logs (Pino) with request correlation
 • Auth: short-lived access JWTs + rotating refresh tokens with reuse/theft detection (lib/tokens.ts, models/RefreshToken.ts, routes/auth.ts)
+• Email verification: registration is sessionless (202) until a single-use emailed token is redeemed; login refuses an unverified address (models/EmailVerificationToken.ts, lib/mailer.ts)
 • Authorization: user/admin RBAC — middleware/authorize.ts (requireRole) fetches the role per request; admin surface in routes/admin.ts
 • Encryption at rest: user email is AES-256-GCM ciphertext with a keyed HMAC blind index for lookups (lib/crypto/)
 • Security: JWT auth, bcrypt hashing, rate limiting, input validation, three-role DB model, field encryption
@@ -157,7 +178,8 @@ Key Components:
 ### Core Functionality
 
 - **User Authentication**: JWT-based auth with secure password hashing (bcrypt, 12 salt rounds), short-lived access tokens + **rotating refresh tokens** with reuse/theft detection (`/auth/refresh`, `/auth/logout`, `/auth/logout-all`)
-- **User Profile Management** (SOC 2 CC6.1 / Privacy): `GET`/`PATCH /user/me` (display name), `PATCH /user/me/email` (re-auth required), `PATCH /user/me/password` (revokes all refresh tokens), `DELETE /user/me` (cascade delete + audit), `GET /user/me/export` (data portability)
+- **Email Verification**: registration returns `202` and **no tokens** — the account is inert until a single-use emailed token is redeemed at `/auth/verify` (resend via `/auth/resend-verification`). Only a SHA-256 of the token is stored; login on an unverified address returns `403 EMAIL_NOT_VERIFIED`. Register/resend responses are byte-identical for known and unknown addresses, so neither endpoint is an account-existence oracle. **Changing an address goes through the same proof**: `PATCH /user/me/email` stages the new address and mails it a link, and only `POST /auth/verify-email-change` moves the account — with a notice to the old address. Mail goes through the `Mailer` interface (`src/lib/mailer.ts`) — Resend in production, a log transport in dev
+- **User Profile Management** (SOC 2 CC6.1 / Privacy): `GET`/`PATCH /user/me` (display name), `PATCH /user/me/email` (re-auth + confirmation link to the new address), `PATCH /user/me/password` (revokes all refresh tokens), `DELETE /user/me` (cascade delete + audit), `GET /user/me/export` (data portability)
 - **Role-Based Access Control** (SOC 2 CC6.1 / CC6.3): `user` / `admin` roles with a separated `/admin` user-management surface; role checked per request (not carried in the JWT), so demotion is immediate. Bootstrap the first admin with `scripts/promote-admin.ts`
 - **Field Encryption at Rest** (SOC 2 CC6.1 / C1.1): user email stored as AES-256-GCM ciphertext with a keyed HMAC blind index carrying uniqueness and lookups
 - **Todo Management**: Full CRUD operations with user isolation and cursor-based pagination (limit/cursor, default 20, max 100)
@@ -189,17 +211,20 @@ Key Components:
 
 ### Rate Limits
 
-| Limiter      | Window     | Max Requests               | Applied To                                                          |
-| ------------ | ---------- | -------------------------- | ------------------------------------------------------------------- |
-| **Global**   | 15 minutes | 200                        | All routes                                                          |
-| **Register** | 1 hour     | 2                          | Account creation                                                    |
-| **Login**    | 15 minutes | 3 (failures, per IP+email) | Authentication (a per-email 30/hour cap also applies)               |
-| **Login/IP** | 15 minutes | 60 (failures, per IP)      | Authentication, across all accounts from one source                 |
-| **Refresh**  | 15 minutes | 60                         | `/auth/refresh`, `/auth/logout` (`/auth/logout-all` uses **Write**) |
-| **Read**     | 1 minute   | 100                        | GET operations                                                      |
-| **Write**    | 1 minute   | 30                         | POST/PATCH/DELETE                                                   |
-| **Health**   | 1 minute   | 60                         | `/health/ready` (liveness `/health` is unlimited)                   |
-| **Export**   | 1 hour     | 5 (per user)               | `/user/me/export`                                                   |
+| Limiter          | Window     | Max Requests               | Applied To                                                          |
+| ---------------- | ---------- | -------------------------- | ------------------------------------------------------------------- |
+| **Global**       | 15 minutes | 200                        | All routes                                                          |
+| **Register**     | 1 hour     | 2                          | Account creation                                                    |
+| **Login**        | 15 minutes | 3 (failures, per IP+email) | Authentication (a per-email 30/hour cap also applies)               |
+| **Login/IP**     | 15 minutes | 60 (failures, per IP)      | Authentication, across all accounts from one source                 |
+| **Verify**       | 15 minutes | 30                         | `/auth/verify`, `/auth/verify-email-change` (per IP)                |
+| **Resend**       | 1 hour     | 3 (per email address)      | `/auth/resend-verification` — abuse costs someone else's inbox      |
+| **Email change** | 1 hour     | 3 (per target address)     | `PATCH /user/me/email` — same mail-bomb shape as resend             |
+| **Refresh**      | 15 minutes | 60                         | `/auth/refresh`, `/auth/logout` (`/auth/logout-all` uses **Write**) |
+| **Read**         | 1 minute   | 100                        | GET operations                                                      |
+| **Write**        | 1 minute   | 30                         | POST/PATCH/DELETE                                                   |
+| **Health**       | 1 minute   | 60                         | `/health/ready` (liveness `/health` is unlimited)                   |
+| **Export**       | 1 hour     | 5 (per user)               | `/user/me/export`                                                   |
 
 ## Technology Stack
 
@@ -214,6 +239,7 @@ Key Components:
 - **Rate Limiting**: express-rate-limit 8.6.1, rate-limit-redis 5.x (optional Redis store)
 - **Metrics**: prom-client 15.1.3 (Prometheus-compatible process and application metrics)
 - **CORS**: cors 2.8.6 (origin validation, preflight handling)
+- **Outbound mail**: Resend HTTP API via `fetch` — no vendor SDK; the `Mailer` interface in `src/lib/mailer.ts` is the seam (log transport in dev)
 - **IDs**: uuid 14.0.1
 - **Testing**: Jest 30.4.2, Supertest 7.2.2, ts-jest 29.4.12
 - **Development**: tsx 4.23.1 (hot reload via `tsx watch`)
@@ -231,6 +257,8 @@ All environment variables are validated at startup with `envalid`. The server wi
 | `JWT_SECRET`           | JWT signing secret (32+ chars)                                                            | `your-super-secret-jwt-key-min-32-chars`                     |
 | `CORS_ORIGIN`          | Allowed CORS origin(s), comma-separated (or `*`). No default — startup fails without it   | `http://localhost:3000,http://localhost:5173`                |
 
+**Also required when `NODE_ENV=production`** (startup aborts otherwise): `METRICS_TOKEN` (32+ chars), real `ENCRYPTION_KEYRING` / `ENCRYPTION_BLIND_INDEX_KEY` (not the committed placeholders), `RESEND_API_KEY`, `MAIL_FROM`, and a non-localhost `APP_BASE_URL`. A production-mode stack that serves no real users (docker-compose, e2e) can boot without the mail three by setting `ALLOW_LOG_MAIL_TRANSPORT_PRODUCTION_CONFIRM=true`.
+
 **Optional**: `PORT`, `NODE_ENV`, `LOG_LEVEL`, database pool tuning, clustering, and more.
 
 See [`docs/configuration.md`](docs/configuration.md) for the full reference including all optional variables, CORS setup, and example `.env` files.
@@ -242,6 +270,8 @@ See [`docs/configuration.md`](docs/configuration.md) for the full reference incl
 - Bcrypt password hashing with 12 salt rounds
 - Secure HTTP response headers via Helmet
 - Short-lived access JWTs (15m default) + **rotating refresh tokens** with reuse/theft detection (replaying a revoked token revokes the user's entire session set)
+- **Verified-email gate on login** — an account cannot hold a session until its address is proven. Verification tokens are 256-bit, single-use, stored only as a SHA-256 hash, and expire in `VERIFICATION_TOKEN_EXPIRY_HOURS` (default 24)
+- **No account-existence oracle**: `/auth/register` and `/auth/resend-verification` return an identical `202` for known and unknown addresses, and the `403 EMAIL_NOT_VERIFIED` branch on login is only reachable _after_ a correct password
 - **Field-level encryption at rest** for user email (AES-256-GCM) with a keyed HMAC blind index for lookups/uniqueness — keys via an env-var keyring behind a `KeyProvider` interface (KMS-ready); production refuses to boot on the dev placeholder key
 - **Role-based access control** (`user`/`admin`) with a per-request role check on `/admin` routes and `access.denied` audit events on forbidden attempts
 - Multi-tiered rate limiting (global + endpoint-specific)
@@ -308,33 +338,36 @@ See [`docs/testing.md`](docs/testing.md) for the full guide including test struc
 
 Base URL: `http://localhost:3001` -- full documentation in [`docs/api.md`](docs/api.md).
 
-| Method       | Path                     | Auth  | Description                                                                                                                                                                |
-| ------------ | ------------------------ | ----- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **POST**     | `/auth/register`         | No    | Create account (returns access + refresh token)                                                                                                                            |
-| **POST**     | `/auth/login`            | No    | Get access + refresh token                                                                                                                                                 |
-| **POST**     | `/auth/refresh`          | No\*  | Rotate the refresh token, get a new access token                                                                                                                           |
-| **POST**     | `/auth/logout`           | No\*  | Revoke the presented refresh token                                                                                                                                         |
-| **POST**     | `/auth/logout-all`       | Yes   | Revoke every refresh token for the user                                                                                                                                    |
-| **GET**      | `/user/me`               | Yes   | Get current profile                                                                                                                                                        |
-| **PATCH**    | `/user/me`               | Yes   | Update display name                                                                                                                                                        |
-| **PATCH**    | `/user/me/email`         | Yes   | Change email (requires current password)                                                                                                                                   |
-| **PATCH**    | `/user/me/password`      | Yes   | Change password (revokes all refresh tokens)                                                                                                                               |
-| **DELETE**   | `/user/me`               | Yes   | Delete account (cascade + audit)                                                                                                                                           |
-| **GET**      | `/user/me/export`        | Yes   | Export profile + todos (JSON)                                                                                                                                              |
-| **GET**      | `/admin/users`           | Admin | List users (paginated)                                                                                                                                                     |
-| **GET**      | `/admin/users/:id`       | Admin | Get a user                                                                                                                                                                 |
-| **PATCH**    | `/admin/users/:id/role`  | Admin | Change a user's role                                                                                                                                                       |
-| **DELETE**   | `/admin/users/:id`       | Admin | Delete a user (cascade + audit)                                                                                                                                            |
-| **GET**      | `/todos`                 | Yes   | List todos (paginated)                                                                                                                                                     |
-| **POST**     | `/todos`                 | Yes   | Create todo                                                                                                                                                                |
-| **GET**      | `/todos/:id`             | Yes   | Get single todo                                                                                                                                                            |
-| **PATCH**    | `/todos/:id`             | Yes   | Toggle done status                                                                                                                                                         |
-| **DELETE**   | `/todos/:id`             | Yes   | Delete todo                                                                                                                                                                |
-| **GET**      | `/health`                | No    | Liveness probe                                                                                                                                                             |
-| **GET**      | `/health/ready`          | No    | Readiness probe                                                                                                                                                            |
-| **GET**      | `/health/ready/detailed` | Token | Detailed readiness (memory/CPU/pool)                                                                                                                                       |
-| **GET**      | `/metrics`               | Token | Prometheus metrics                                                                                                                                                         |
-| **GET/POST** | `/echo`                  | No    | Benchmark echo — mounted only when `ENABLE_ECHO_ROUTES=true` (default: non-production); bypasses logging and rate limiting. See [`docs/benchmarks.md`](docs/benchmarks.md) |
+| Method       | Path                        | Auth  | Description                                                                                                                                                                |
+| ------------ | --------------------------- | ----- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **POST**     | `/auth/register`            | No    | Create account — **202, no tokens**; emails a single-use verification link                                                                                                 |
+| **POST**     | `/auth/verify`              | No    | Redeem the emailed token; the account becomes usable                                                                                                                       |
+| **POST**     | `/auth/resend-verification` | No    | Re-issue a verification link (202, same body as register)                                                                                                                  |
+| **POST**     | `/auth/verify-email-change` | No    | Redeem the token mailed to a new address; moves the account to it                                                                                                          |
+| **POST**     | `/auth/login`               | No    | Get access + refresh token — `403 EMAIL_NOT_VERIFIED` until verified                                                                                                       |
+| **POST**     | `/auth/refresh`             | No\*  | Rotate the refresh token, get a new access token                                                                                                                           |
+| **POST**     | `/auth/logout`              | No\*  | Revoke the presented refresh token                                                                                                                                         |
+| **POST**     | `/auth/logout-all`          | Yes   | Revoke every refresh token for the user                                                                                                                                    |
+| **GET**      | `/user/me`                  | Yes   | Get current profile                                                                                                                                                        |
+| **PATCH**    | `/user/me`                  | Yes   | Update display name                                                                                                                                                        |
+| **PATCH**    | `/user/me/email`            | Yes   | Request an email change (current password + confirmation link to the new address)                                                                                          |
+| **PATCH**    | `/user/me/password`         | Yes   | Change password (revokes all refresh tokens)                                                                                                                               |
+| **DELETE**   | `/user/me`                  | Yes   | Delete account (cascade + audit)                                                                                                                                           |
+| **GET**      | `/user/me/export`           | Yes   | Export profile + todos (JSON)                                                                                                                                              |
+| **GET**      | `/admin/users`              | Admin | List users (paginated)                                                                                                                                                     |
+| **GET**      | `/admin/users/:id`          | Admin | Get a user                                                                                                                                                                 |
+| **PATCH**    | `/admin/users/:id/role`     | Admin | Change a user's role                                                                                                                                                       |
+| **DELETE**   | `/admin/users/:id`          | Admin | Delete a user (cascade + audit)                                                                                                                                            |
+| **GET**      | `/todos`                    | Yes   | List todos (paginated)                                                                                                                                                     |
+| **POST**     | `/todos`                    | Yes   | Create todo                                                                                                                                                                |
+| **GET**      | `/todos/:id`                | Yes   | Get single todo                                                                                                                                                            |
+| **PATCH**    | `/todos/:id`                | Yes   | Toggle done status                                                                                                                                                         |
+| **DELETE**   | `/todos/:id`                | Yes   | Delete todo                                                                                                                                                                |
+| **GET**      | `/health`                   | No    | Liveness probe                                                                                                                                                             |
+| **GET**      | `/health/ready`             | No    | Readiness probe                                                                                                                                                            |
+| **GET**      | `/health/ready/detailed`    | Token | Detailed readiness (memory/CPU/pool)                                                                                                                                       |
+| **GET**      | `/metrics`                  | Token | Prometheus metrics                                                                                                                                                         |
+| **GET/POST** | `/echo`                     | No    | Benchmark echo — mounted only when `ENABLE_ECHO_ROUTES=true` (default: non-production); bypasses logging and rate limiting. See [`docs/benchmarks.md`](docs/benchmarks.md) |
 
 \* `/auth/refresh` and `/auth/logout` take the refresh token in the body — they don't require a (possibly expired) access token; `/auth/logout-all` requires a valid access token.
 
@@ -372,10 +405,12 @@ todo-api/
 │   ├── models/                # Data access layer (Prisma wrappers)
 │   │   ├── User.ts            # User model (password hashing, email field-encryption, profile/role mutations)
 │   │   ├── Todo.ts            # Todo model (mutations wrapped in $transaction with audit insert)
-│   │   └── RefreshToken.ts    # Refresh-token issue/verify/rotate/revoke + reuse/theft detection
+│   │   ├── RefreshToken.ts    # Refresh-token issue/verify/rotate/revoke + reuse/theft detection
+│   │   ├── EmailVerificationToken.ts # Signup verification token issue/redeem (stores SHA-256 only, single use)
+│   │   └── EmailChangeToken.ts # Pending address + change token (new address encrypted until redeemed)
 │   ├── routes/                # Express routes
-│   │   ├── auth.ts            # Auth routes: register, login, refresh, logout, logout-all (with audit emissions)
-│   │   ├── user.ts            # Self-service profile: /user/me, email/password change, delete, export
+│   │   ├── auth.ts            # Auth routes: register, verify, resend-verification, verify-email-change, login, refresh, logout, logout-all (with audit emissions)
+│   │   ├── user.ts            # Self-service profile: /user/me, email-change request, password change, delete, export
 │   │   ├── admin.ts           # Admin user management (/admin/users, role change, delete) behind requireAdmin
 │   │   ├── echo.ts            # Benchmark echo endpoint
 │   │   ├── health.ts          # Health check endpoints
@@ -384,7 +419,8 @@ todo-api/
 │   │   └── env.ts             # Environment variable validation (envalid)
 │   └── lib/                   # Shared utilities
 │       ├── prisma.ts          # Prisma client singleton
-│       ├── tokens.ts          # Access-token sign/verify + refresh-token generation/hashing
+│       ├── tokens.ts          # Access-token sign/verify + refresh/verification token generation/hashing
+│       ├── mailer.ts          # Mailer interface + Resend adapter (fetch) and dev log transport
 │       ├── crypto/            # Field encryption: fieldCrypto.ts (AES-256-GCM + blind index), keyProvider.ts
 │       ├── normalizeEmail.ts  # Canonical email form (NFC + lowercase + trim)
 │       ├── dbConnect.ts       # Startup connect-with-retry (decorrelated jitter)
@@ -392,7 +428,7 @@ todo-api/
 │       ├── auditActions.ts    # Audit action vocabulary constants (auth.*, todo.*, user.*, admin.*)
 │       └── auditLog.ts        # write() (transactional) and writeOrLog() (non-blocking)
 ├── prisma/                     # Prisma schema and migrations
-│   ├── schema.prisma          # Database schema (User incl. name/role, Todo, RefreshToken, AuditEntry)
+│   ├── schema.prisma          # Database schema (User incl. name/role/emailVerifiedAt, Todo, RefreshToken, EmailVerificationToken, EmailChangeToken, AuditEntry)
 │   ├── generated/             # Generated Prisma types
 │   ├── migrations/            # Database migrations (incl. 20260526000001_add_audit_entries)
 │   └── sql/
@@ -400,6 +436,7 @@ todo-api/
 ├── scripts/                    # Operational scripts
 │   ├── preflight-roles.ts     # Pre-deploy DB role/privilege verification
 │   ├── promote-admin.ts       # Grant/revoke the admin role by email (RBAC bootstrap)
+│   ├── verify-email.ts        # Break-glass: mark an address verified when mail delivery is broken
 │   ├── backfill-email-crypto.ts # Email field-encryption backfill (hash/encrypt/rehash phases)
 │   └── predeploy.ts           # Pre-deploy orchestration
 ├── docker/
@@ -427,7 +464,7 @@ todo-api/
 │   ├── docker.md                  # Docker setup, commands, production config
 │   ├── operations.md              # Deploy/DB runbooks (role bootstrap, P3009 recovery)
 │   ├── pgbackrest-implementation.md # pgBackRest backup and disaster-recovery guide
-│   ├── runtime-correctness.md     # Production runtime correctness plan
+│   ├── runtime-correctness.md     # Historical: shutdown/pool/error-handling plan (implemented)
 │   └── testing.md                 # Test framework, helpers, writing tests
 ├── eslint.config.js           # ESLint configuration
 ├── package.json               # Dependencies and scripts

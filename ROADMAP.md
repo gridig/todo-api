@@ -9,15 +9,17 @@ This document outlines the infrastructure and production-readiness work required
 ### Email Service Integration
 
 **Priority**: Medium
-**Effort**: Medium
+**Effort**: —
 **Impact**: Medium
 
-> **Vendor dependency:** This item commits to Resend as the email provider. Evaluate Resend's pricing, SLAs, and API stability before starting. Consider defining an email service interface (`lib/emailService.ts`) so the provider can be swapped without touching route handlers.
+Complete — see **Completed** below (registration verification 2026-08-15, verified email change and
+the operator break-glass path 2026-08-16). Resend is the provider; the vendor evaluation is closed.
 
-- [ ] Integrate email service (Resend)
-- [ ] Add email verification on registration
-- [ ] Add email change with verification
-- [ ] Add tests for email flows
+- [x] Integrate email service (Resend)
+- [x] Add email verification on registration
+- [x] Add email change with verification
+- [x] Operator break-glass verification (`scripts/verify-email.ts`)
+- [x] Add tests for email flows
 
 **Why**: Email verification prevents fake account registration and is a prerequisite for **Password Reset Flow**.
 
@@ -27,12 +29,15 @@ This document outlines the infrastructure and production-readiness work required
 **Effort**: Low
 **Impact**: Medium
 
-Depends on **Email Service Integration**. Cannot ship without a working email provider.
+**Unblocked** — the dependency shipped. The mailer (`lib/mailer.ts`), the single-use hashed-token
+model (`EmailVerificationToken`), the enumeration-safe 202 response shape, and the per-address resend
+limiter are all in place, so this is largely an adaptation of existing pieces rather than new
+infrastructure. That makes it the cheapest remaining item outside the SOC 2 blockers.
 
-- [ ] Implement `POST /auth/forgot-password` endpoint
-- [ ] Generate secure reset tokens with expiration
-- [ ] Add `POST /auth/reset-password` endpoint
-- [ ] Add rate limiting for reset requests
+- [ ] Implement `POST /auth/forgot-password` endpoint (202 for every address, same anti-enumeration shape as register/resend)
+- [ ] Generate secure reset tokens with expiration (mirror `EmailVerificationToken`: 256-bit, SHA-256 at rest, single use)
+- [ ] Add `POST /auth/reset-password` endpoint — **revoke every refresh token on success**, as `PATCH /user/me/password` does
+- [ ] Add rate limiting for reset requests (per-address key, mirroring `resend-verification`)
 - [ ] Send email templates via Resend
 - [ ] Add tests for password reset flow
 
@@ -47,11 +52,14 @@ Depends on **Email Service Integration**. Cannot ship without a working email pr
 
 The Prometheus metrics endpoint is already implemented — see `middleware/metrics.ts`. This item covers the remaining operational observability stack.
 
+Counters that exist but have no alert wired to them: `audit_write_failures_total`, `rate_limit_store_fallback_total`, and `verification_email_failures_total`. The last is the most urgent — login is gated on a verified address, so a silent mail outage is a silent signup outage with nothing failing in the request path (triage: [operations.md → Verification email failures](docs/operations.md#verification-email-failures)).
+
 - [ ] Track API response times **[SOC 2]**
 - [ ] Monitor rate limit hits **[SOC 2]** (CC7.2: detect abuse patterns)
 - [ ] Track authentication failures **[SOC 2]** (CC7.2: detect brute force / credential stuffing)
 - [ ] Set up Grafana dashboards **[SOC 2]**
 - [ ] Add alerting for critical issues (error rate spikes, auth failures, downtime) **[SOC 2]**
+- [ ] Alert on `verification_email_failures_total` — any sustained non-zero rate means new accounts are being created that can never log in **[SOC 2]**
 - [ ] **Backup-failure alerting** (inherited from the completed Backup & DR work) — expose the pgBackRest scheduler's metrics file (`/tmp/pgbackrest-metrics.prom`: `pgbackrest_last_full_backup_age_seconds`, `pgbackrest_last_diff_backup_age_seconds`, `pgbackrest_wal_archive_ok`) via a node*exporter textfile mount or a small HTTP exporter, then alert: no full in 30h → critical; no diff in 7h → warning; `pgbackrest_wal_archive_ok == 0` → critical (RPO at risk). Railway has no native log-content alerting, so this is the \_only* backup-failure alert path — there is no interim. **[SOC 2]**
 - [ ] Instrument with OpenTelemetry SDK (`@opentelemetry/sdk-node`, `@opentelemetry/auto-instrumentations-node`) emitting OTLP — vendor-neutral; the same OTLP exporter works with any compatible backend (Jaeger, Honeycomb, Datadog, Grafana Tempo, AWS X-Ray) **[SOC 2]**
 - [ ] Ship structured logs to a central aggregator (Grafana Loki, Datadog, or stdout for container orchestrator collection) **[SOC 2]**
@@ -107,9 +115,10 @@ POST endpoints that create resources (`POST /todos`, `POST /auth/register`) have
 **Effort**: Medium
 **Impact**: High
 
-The Redis store factory is implemented in `middleware/rateLimiter.ts` with graceful in-memory fallback, `REDIS_URL` env var is configured, all eight rate limiters use the shared store, and Redis disconnect is wired into graceful shutdown. The remaining work is integration tests. Note: `REDIS_URL` is still commented out in the `app` service env in `docker-compose.yml`, so the compose app does not yet exercise Redis.
+The Redis store factory is implemented in `middleware/rateLimiter.ts` with graceful in-memory fallback, `REDIS_URL` env var is configured, all **twelve** rate limiters (`auth`, `login-email`, `login-ip`, `write`, `read`, `global`, `register`, `health`, `refresh`, `user-export`, `verify-email`, `resend-verification`) use the shared store, and Redis disconnect is wired into graceful shutdown (2s cap, then `destroy()`). The remaining work is integration tests. Note: `REDIS_URL` is still commented out in the `app` service env in `docker-compose.yml`, so the compose app deliberately exercises the in-memory fallback path.
 
-- [ ] Add integration tests for shared rate limit counting
+- [ ] Add integration tests for shared rate limit counting — `__tests__/integration/rateLimit.test.ts` covers the `auth`, `login-ip` and `user-export` limiters against a single live instance, but nothing asserts that two instances sharing a Redis store share a counter
+- [ ] Cover the fallback path too: with Redis unreachable the limiters must keep serving from memory and increment `rate_limit_store_fallback_total` rather than failing requests
 
 **Why**: In a multi-instance deployment, in-memory rate limiting is ineffective — a client can get N times the configured limit by hitting different instances. After a process restart, all counters reset to zero, allowing a burst of previously-limited traffic. Redis provides a shared counter across all instances. The fallback pattern (in-memory when `REDIS_URL` is empty) allows incremental adoption.
 
@@ -119,7 +128,7 @@ The Redis store factory is implemented in `middleware/rateLimiter.ts` with grace
 **Effort**: Medium
 **Impact**: High
 
-- [ ] Introduce `/api/v1/` prefix for all existing routes (auth, todos, user, health, metrics)
+- [ ] Introduce `/api/v1/` prefix for all existing routes (auth — now including `/auth/verify` and `/auth/resend-verification` — todos, user, admin, health, metrics)
 - [ ] Set up versioned router structure (`routes/v1/`) for future `/api/v2/` additions
 - [ ] Add `API-Version: 1` response header to all `/api/v1/` responses — note: `API-Version` not `X-API-Version`; RFC 6648 (2012) deprecated the `X-` prefix convention for new headers
 - [ ] Add `Deprecation` and `Sunset` HTTP headers to any deprecated endpoints per RFC 8594 — machine-readable deprecation signals for API clients
@@ -134,13 +143,31 @@ The Redis store factory is implemented in `middleware/rateLimiter.ts` with grace
 **Effort**: Low
 **Impact**: High
 
+The list endpoints (`GET /todos`, `GET /admin/users`) already return `{ data, meta: { nextCursor, hasMore } }`. Everything else returns a bare object (`GET /user/me`, `POST /todos`) or a bare `{ message }` (register, verify, logout) — the inconsistency this item closes.
+
 - [ ] Define `SuccessResponse<T>` type: `{ data: T; meta: { requestId, timestamp, pagination? } }`
 - [ ] Update all route handlers to wrap success responses in the envelope
-- [ ] Add pagination metadata to the `meta` field on list endpoints
+- [ ] Add pagination metadata to the `meta` field on list endpoints — already the shape on the two list endpoints; align the field names with the new `meta`
+- [ ] Decide the shape for message-only responses (register/verify/resend/logout) — either `{ data: { message } }` or an explicit carve-out, documented either way
 - [ ] Update all tests to assert on the new envelope structure
 - [ ] Error responses keep their existing format — no change
 
 **Why**: The error format is already consistent. A matching success format makes the API predictable for consumers.
+
+### Editable Todo Text
+
+**Priority**: Medium
+**Effort**: Low
+**Impact**: Medium
+
+A todo's `text` cannot be changed after creation. `PATCH /todos/:id` toggles `done` and nothing else; `TodoService` has `create`, `toggleDone` and `delete`, with no `update`. Users can only correct a typo by deleting and recreating, which loses the id, `createdAt`, and the audit continuity of the original row.
+
+- [ ] Add `text` to the `PATCH /todos/:id` body (optional, same 1-500 char validation as create); keep the bare-body call toggling `done` so existing clients don't break, or split toggle onto its own sub-route and deprecate the implicit behaviour
+- [ ] `TodoService.update` using the same single-query `UPDATE … RETURNING` + audit-inside-`$transaction` shape as `toggleDone`, with `previousValue`/`newValue` snapshots
+- [ ] Enforce user isolation in the `WHERE` clause (cross-user hit must 404 and emit `access.denied`, matching the other mutation paths)
+- [ ] Update `docs/api.md`, integration tests, and the k6 application-performance script
+
+**Why**: Edit is the one CRUD verb the flagship resource is missing. It also matters disproportionately for the starter-template use case: a copied-from repo with no "update a resource" example leaves the most-copied pattern unrepresented.
 
 ### API Documentation
 
@@ -164,8 +191,8 @@ The Redis store factory is implemented in `middleware/rateLimiter.ts` with grace
 **Effort**: Medium
 **Impact**: Low-Medium
 
-- [ ] Restrict `User.findByEmail` to select only needed fields when called by future, non-auth code paths — today `findByEmail` is only called by the login route (which legitimately needs `password`) and `middleware/auth.ts` does no database access. There is no live offender; tracked here so that any future caller (e.g. profile lookup, RBAC) selects only what it needs and does not pull the password hash into memory unnecessarily.
-- [ ] Apply single-query mutation pattern (`UPDATE...RETURNING`, `DELETE...RETURNING`) to all remaining two-query transactions — proven effective for PATCH `toggleDone`; extend to other mutation paths
+- [x] Restrict `User.findByEmail` to select only needed fields — done 2026-08-16: `findVerificationStateByEmail` serves the resend path without the password hash, leaving `findByEmail` as the login-only lookup. Any future non-auth caller should follow that split rather than widening either method.
+- [ ] Apply single-query mutation pattern (`UPDATE...RETURNING`, `DELETE...RETURNING`) to all remaining two-query transactions — done for `toggleDone` and `delete` in `models/Todo.ts`; the remaining two-query shapes are in `models/User.ts` (profile/password/role mutations, each paired with an audit insert in the same `$transaction`)
 - [ ] Apply field projection to all Prisma queries (select only needed fields)
 - [ ] Profile and optimize hot paths identified by monitoring
 
@@ -221,9 +248,9 @@ Single `DATABASE_URL` connects to one PostgreSQL instance for all operations. As
 
 Core migration is complete (`@db.Uuid` on PK/FK fields, `20260313101015_uuid_native` migration in place, indexes rebuilt). Only the verification work remains.
 
-- [ ] Review raw SQL in `toggleDone`/`update`/`delete` (`models/Todo.ts`) — parameterized `${id}` binds work against `uuid` columns via the pg adapter; confirm under integration tests
+- [ ] Review raw SQL in `toggleDone`/`delete` (`models/Todo.ts` — those are the only two raw-SQL methods; there is no `update`) — parameterized `${id}` binds work against `uuid` columns via the pg adapter; confirm under integration tests
 - [x] Review `isValidUUID` regex in `routes/todos.ts` — done: the string-based regex is gone; route params are validated via Joi `.uuid()` in `schemas.paramsSchema` (`validateParams`)
-- [ ] Run benchmarks before/after to measure index size and query latency improvement
+- [ ] Run benchmarks before/after to measure index size and query latency improvement — blocked on re-running the suite at all; the committed figures in `docs/benchmarks.md` predate several changes to the measured path
 - [ ] Update tests
 
 **Why**: Native `uuid` columns produce ~2.25x smaller B-tree indexes, use binary comparison instead of string comparison, and reduce storage overhead on every PK and FK.
@@ -269,15 +296,28 @@ Startup resilience (decorrelated-jitter retry in `lib/dbConnect.ts`) and runtime
 
 ### Zero-Downtime Migration Strategy
 
-The roadmap items that required database schema migrations — **User Profile Management** (User `name` field), **JWT Refresh + Token Revocation** (RefreshToken model), **Role-Based Access Control** (User `role` field) — have all shipped. Once the API is serving live traffic, any future schema change still needs a migration plan that avoids downtime. Document a standard approach (e.g., expand-contract pattern, Prisma `migrate deploy` in a pre-deploy step, backward-compatible column additions) before the first post-launch migration.
+The roadmap items that required database schema migrations — **User Profile Management** (User `name` field), **JWT Refresh + Token Revocation** (RefreshToken model), **Role-Based Access Control** (User `role` field), **Email Verification** (EmailVerificationToken model + `users.email_verified_at`) — have all shipped. Each was additive (new table or nullable column), so none needed a coordinated cutover; the one that did — the email-encryption expand/backfill/contract chain — is documented in [operations.md → Field encryption key management & rotation](docs/operations.md#field-encryption-key-management--rotation). Once the API is serving live traffic, any future schema change still needs a migration plan that avoids downtime. Document a standard approach (e.g., expand-contract pattern, Prisma `migrate deploy` in a pre-deploy step, backward-compatible column additions) before the first post-launch migration.
+
+### Expired-row cleanup
+
+Two token tables accumulate rows that nothing deletes. Both services expose a `deleteExpired()` that is never called — there is no scheduler:
+
+- `RefreshTokenService.deleteExpired()` — revoked-but-unexpired rows must be kept so reuse detection still matches, so the job can only drain rows past `expires_at` (default 30 days).
+- `EmailVerificationTokenService.deleteExpired()` — consumed and expired verification tokens (default 24h lifetime), which turn over much faster.
+- `EmailChangeTokenService.deleteExpired()` — same lifetime, and these rows also hold a **pending address** (encrypted, but still PII at rest), so draining them is a data-minimisation win as well as a size one.
+
+A single interval or cron job draining both is enough at current scale. Until it exists, both tables grow monotonically.
 
 ### PII in Request/Response Logs
 
-Pino is configured to redact passwords, tokens, and auth headers. However, the todo `text` field — which users may populate with PII — is logged in some request/response paths. Audit whether `text` content appears in logs and add redaction or exclusion if so.
+Pino is configured to redact passwords, tokens, and auth headers. Two known gaps:
+
+- The todo `text` field — which users may populate with PII — is logged in some request/response paths. Audit whether `text` content appears in logs and add redaction or exclusion if so.
+- The **dev log mail transport prints the full verification link, token included**. That is the point of it locally, but it means a live single-use credential lands in the log stream — so the transport must never be selected anywhere logs are shipped or retained. Production refuses to boot without real mail config for exactly this reason; the escape hatch (`ALLOW_LOG_MAIL_TRANSPORT_PRODUCTION_CONFIRM`) is for stacks with no real users.
 
 ### Load Testing in CI
 
-k6 benchmark scripts exist (`benchmarks/k6/`) but are not part of the CI pipeline. Without automated performance regression detection, latency regressions can ship unnoticed. Consider adding a lightweight k6 smoke test to the CI pipeline with a latency threshold gate.
+k6 benchmark scripts exist (`benchmarks/k6/`) but are not part of the CI pipeline. Without automated performance regression detection, latency regressions can ship unnoticed. Consider adding a lightweight k6 smoke test to the CI pipeline with a latency threshold gate. Note that the seed script now writes pre-verified users (`benchmarks/seed.ts`) — login refuses unverified addresses, so any new load script must either seed the same way or drive the verification flow itself.
 
 ### Deployment Decisions (Non-Goals)
 
@@ -315,9 +355,10 @@ For a SOC 2-compliant production deployment, implement in this order:
 ### Phase E: Feature Development
 
 - **API Versioning + Response Envelope** — `/api/v1/` prefix + `{ data, meta }` envelope + `API-Version` header + `Deprecation`/`Sunset` headers
+- **Editable Todo Text** — `PATCH /todos/:id` currently toggles `done` only; add `text` editing (the missing CRUD verb)
 - **Idempotency Keys** — `Idempotency-Key` middleware for POST endpoints
-- **Email Service Integration** — Email verification via Resend (vendor decision required before starting)
-- **Password Reset Flow** — Forgot/reset password flow (depends on Email Service Integration)
+- ~~**Email Service Integration**~~ — Done: registration verification (2026-08-15), verified email change + operator break-glass script (2026-08-16). See **Completed** below
+- **Password Reset Flow** — Forgot/reset password flow. **Unblocked** — mailer + single-use token model already exist, so this is the cheapest remaining feature item
 - **API Documentation** — Spec-first OpenAPI 3.1 + `CHANGELOG.md`; remaining low-priority items as time permits
 - **Search & Discovery** — Phase 1: `pg_trgm` fuzzy todo search. Phase 2: Elasticsearch multi-entity search with outbox sync once comments/attachments/notes entities exist. Design memo: [docs/databases.md](docs/databases.md)
 
@@ -326,6 +367,76 @@ Items tagged **[SOC 2]** in Phases A–C must be completed before the SOC 2 Type
 ---
 
 ## Completed
+
+### Verified Email Change + Break-Glass Verification — done 2026-08-16
+
+**SOC 2**: CC6.1 (Logical Access), CC7.2 (Security Event Monitoring — the operator path is audited).
+
+`PATCH /user/me/email` used to re-authenticate with the password and swap the address on the spot,
+proving nothing about the new address: a typo was a self-lockout, and anyone holding a session plus
+the password could move an account to an inbox they control. The address change is now proven the
+same way a signup is:
+
+- **`EmailChangeToken` model** (`prisma/schema.prisma`, migration
+  `20260816090000_add_email_change_tokens`) — SHA-256 of a 256-bit token, plus the **pending address**
+  as AES-256-GCM ciphertext and a keyed blind index. A separate table from `EmailVerificationToken`
+  rather than a `purpose` column, so a signup token can never be replayed against the change endpoint.
+  Hand-written migration: `db_admin` is not a superuser and cannot create Prisma's shadow database
+  (P3014).
+- **Two-step flow** — `PATCH /user/me/email` (auth + current password) returns **202** and stages the
+  address; `POST /auth/verify-email-change` (unauthenticated, because the link is opened from the new
+  inbox) commits it, rotates the blind index, and marks the account verified. The old address stays
+  live until redemption.
+- **Anti-enumeration** — the request endpoint returns the same 202 for a free and an already-taken
+  address; a token for a taken address just never becomes usable. Uniqueness is re-checked inside the
+  redemption transaction (`409 DUPLICATE_EMAIL`), with the unique-violation catch closing the race.
+- **Old-address notice** — a mail to the previous address naming the new one. It is the only signal
+  the prior owner gets that the account moved, and the tripwire for a takeover via a stolen session.
+- **Rate limiting** — new `email-change` limiter, 3/hour keyed by the blind index of the **target**
+  address (a per-user key would let one account spray many victims); redemption shares the
+  `verify-email` budget.
+- **Break-glass** — [`scripts/verify-email.ts`](scripts/verify-email.ts) marks an address verified when
+  delivery is broken, consuming outstanding tokens and writing an `admin.user.email.verify` audit row
+  with `metadata.via`. Deliberately a different action from the self-service `auth.email.verify`.
+  Runbook: [operations.md → Break-glass](docs/operations.md#break-glass-verifying-an-address-by-hand).
+- **Field projection** — `UserService.findVerificationStateByEmail` gives the resend path identity +
+  verification state without the bcrypt hash; `findByEmail` (which loads it) is now the login lookup
+  only. Closes the live offender noted under **Performance Optimizations**.
+- Tests: `__tests__/integration/user/change-email.test.ts` (request, redemption, single-use, expiry,
+  contested address, audit-hash-only), `__tests__/unit/lib/mailer.test.ts`,
+  `__tests__/unit/scripts/verify-email.test.ts`, plus limiter-wiring coverage.
+
+### Email Verification on Registration — done 2026-08-15
+
+Registration is now sessionless and an address must be proven before it can hold a session:
+
+- **`EmailVerificationToken` model** (`prisma/schema.prisma`, migration `20260815120000_add_email_verification`)
+  — 256-bit opaque token, stored only as a **SHA-256 hash**, single use (`consumed_at`), expiring after
+  `VERIFICATION_TOKEN_EXPIRY_HOURS` (default 24). FK-cascades on user delete. `users.email_verified_at`
+  carries the verified state.
+- **Endpoints** (`src/routes/auth.ts`): `POST /auth/register` now returns **202 with no tokens**;
+  `POST /auth/verify` redeems the emailed token; `POST /auth/resend-verification` re-issues one
+  (invalidating outstanding tokens for that account). Login returns `403 EMAIL_NOT_VERIFIED` — checked
+  _after_ the password comparison, so it is not an oracle.
+- **Anti-enumeration** — register and resend return a byte-identical 202 for known and unknown
+  addresses. The three `VERIFICATION_TOKEN_*` failure codes are distinguished only because reaching any
+  of them requires already holding a 256-bit token.
+- **Mailer** (`src/lib/mailer.ts`) — a `Mailer` interface with a Resend adapter (single `fetch` POST, no
+  vendor SDK) and a dev log transport. Sends are fire-and-forget; failures increment
+  `verification_email_failures_total`. Production refuses to boot without `RESEND_API_KEY` / `MAIL_FROM`
+  / a non-localhost `APP_BASE_URL`, unless `ALLOW_LOG_MAIL_TRANSPORT_PRODUCTION_CONFIRM=true` marks the
+  stack as serving no real users.
+- **Rate limits** — `verify-email` 30 per 15 min per IP; `resend-verification` 3/hour keyed by the email
+  blind index (abuse costs someone else's inbox and our sender reputation).
+- **Audit actions** — `auth.email.verification.sent`, `auth.email.verify`.
+- Tests: `__tests__/integration/auth/email-verification.test.ts`, `__tests__/unit/lib/mailer.test.ts`.
+  Docs: `docs/api.md` → **Authentication**; `docs/configuration.md` → **Email Verification & Outbound
+  Mail**; `docs/operations.md` → **Verification email failures**.
+
+**Carried into other tracks (not blockers here):**
+
+- **Verified email change** and an **operator break-glass verification path** → **Email Service
+  Integration** (above).
 
 ### Role-Based Access Control (RBAC) **[SOC 2]** — done 2026-07-12
 
@@ -364,8 +475,10 @@ Self-service account lifecycle under a new `/user` router (`src/routes/user.ts`,
   `20260712154802_add_user_name`); nullable `VarChar(100)`, stored plaintext (the field-encryption layer
   is deliberately scoped to `email`, the identifying PII with a blind-index lookup).
 - **Endpoints** — `GET /user/me` (profile), `PATCH /user/me` (display name), `PATCH /user/me/email`
-  (re-authenticates with the current password, then re-encrypts the ciphertext column and rotates the blind
-  index — a dedicated endpoint so the re-auth is unconditional, not a request-gated check),
+  (re-authenticates with the current password, then re-encrypted the ciphertext column and rotated the
+  blind index **immediately** — a dedicated endpoint so the re-auth is unconditional, not a
+  request-gated check; **superseded 2026-08-16**, it now stages the address and mails a confirmation
+  link — see **Verified Email Change** above),
   `PATCH /user/me/password` (verifies current password, then rotates it and **revokes every refresh token**
   atomically), `DELETE /user/me` (re-auth, then audit-then-delete in one transaction — todos and refresh
   tokens cascade away, the `user.delete` audit row is retained), `GET /user/me/export` (profile + all todos
@@ -404,7 +517,8 @@ rotating refresh tokens:
 
 - **Expired-token cleanup** — `RefreshTokenService.deleteExpired()` exists but is not yet scheduled; a
   cron/interval job can drain expired rows later (revoked-but-unexpired rows are kept so reuse detection
-  still matches).
+  still matches). `EmailVerificationTokenService.deleteExpired()` has the same gap — both are now tracked
+  together under **Cross-Cutting Concerns → Expired-row cleanup**.
 
 ### Secrets Management **[SOC 2]** — done 2026-07-12
 

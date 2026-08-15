@@ -137,12 +137,47 @@ none of them, so schema-diffing tools will try to "fix" the difference:
 
 - **Never run `prisma db push`** against any database with the audit table — it diffs live DB
   against `schema.prisma` and will drop the indexes and can desync the REVOKE.
-- **Always create migrations with `prisma migrate dev --create-only`** and hand-review the generated
-  SQL before applying. Delete any generated statement that touches `audit_entries` (`DROP INDEX
-idx_audit_*`, `ALTER TABLE audit_entries …`) unless the change is deliberate.
+- **Always hand-review generated migration SQL before applying.** Delete any generated statement that
+  touches `audit_entries` (`DROP INDEX idx_audit_*`, `ALTER TABLE audit_entries …`) unless the change
+  is deliberate.
 
 A guard test (`__tests__/unit/migrations-guard.test.ts`) fails CI if a committed migration contains
 such statements — that is the enforcement point; this section is the explanation.
+
+### Authoring a migration (the generator needs a superuser)
+
+`prisma migrate dev --create-only` is the documented way to author one, but it **fails against this
+project's DSNs**:
+
+```
+Error: P3014
+Prisma Migrate could not create the shadow database.
+Original error: ERROR: permission denied to create database
+```
+
+`prisma.config.ts` resolves `DATABASE_MIGRATE_URL` (the `db_admin` role), and `db_admin` deliberately
+owns the schema without being a superuser — it cannot `CREATE DATABASE`, which is what the shadow
+database needs. That restriction is the point of the role model, so the workaround is on the
+authoring side, not the role:
+
+1. **Hand-write it** (what `20260816090000_add_email_change_tokens` does): create
+   `prisma/migrations/<UTC-timestamp>_<name>/migration.sql`, mirroring the style the generator
+   produced for the nearest comparable table. Then verify against a dev DB:
+
+   ```bash
+   pnpm exec prisma migrate deploy
+   pnpm exec prisma migrate status   # must report the schema up to date
+   pnpm run test:unit                # migrations-guard + schema-cascade-guard
+   ```
+
+2. **Or give the generator a superuser shadow DB** for the authoring step only — point
+   `DATABASE_MIGRATE_URL` at the local superuser DSN (`postgres:postgres@localhost:5432/todo_api`)
+   while you run `--create-only`, then set it back. Never deploy with that DSN: the app must connect
+   as `db_app` or the audit-log REVOKE and the startup tamper probe are meaningless.
+
+A permanent fix would be a `shadowDatabaseUrl` in the datasource block pointing at a scratch DB; it
+has not been adopted because it adds a superuser-capable credential to every dev environment to save
+one command per migration.
 
 ## Field encryption key management & rotation
 
@@ -252,6 +287,66 @@ so script grants show up in the same access-review query as API grants.
 - Role is checked per request (not carried in the JWT), so a promotion/demotion takes effect immediately —
   no re-login required to gain access, and a demotion revokes admin access on the next request.
 
+## Verification email failures
+
+Login is gated on a verified address, so a mail outage is a **silent signup outage**: registration
+still returns `202`, nothing fails in the request path, and every account created during the window is
+stranded. The only signal is the counter.
+
+**Detect.** `verification_email_failures_total` (Prometheus, `GET /metrics`). Any sustained non-zero
+rate means users are signing up and never receiving a link. Alert on `increase(...[15m]) > 0`. Pair it
+with a business check — registrations with no matching `auth.email.verify` audit row inside an hour:
+
+```sql
+SELECT count(*) FROM users u
+WHERE u.email_verified_at IS NULL AND u.created_at < now() - INTERVAL '1 hour';
+```
+
+**Triage, in order:**
+
+1. **Is the app even trying to send?** A production boot without `RESEND_API_KEY`/`MAIL_FROM` aborts —
+   unless `ALLOW_LOG_MAIL_TRANSPORT_PRODUCTION_CONFIRM=true` is set, in which case the startup log
+   carries a `WARNING` and links are only being written to the log. Check that flag first; on a
+   user-serving deploy it must be unset.
+2. **Vendor side.** Resend dashboard: API key valid, sending domain still verified (SPF/DKIM), account
+   not rate-limited or suspended. A revoked key or an expired domain verification both surface as send
+   failures with no app-side change.
+3. **`APP_BASE_URL` correctness.** A wrong origin does not fail the send — the mail arrives with a link
+   pointing at the wrong host. Symptom is verification emails delivered but never redeemed.
+
+**Recovery.** Fix the cause, then have affected users hit `POST /auth/resend-verification` (3/hour per
+address). Tokens issued during the outage remain valid until they expire, so a user who did receive a
+link can still use it.
+
+### Break-glass: verifying an address by hand
+
+When delivery is broken and a specific account has to be unblocked before the fix lands, mark it
+verified with the operator script rather than by hand-written SQL — the script audits, consumes any
+outstanding tokens, and refuses to touch the wrong row.
+
+```bash
+pnpm build
+node dist/scripts/verify-email.js alice@example.com --dry-run   # report only
+node dist/scripts/verify-email.js alice@example.com
+# On Railway: railway run --service todo-api node dist/scripts/verify-email.js <email>
+```
+
+- Requires the app env: it computes the email **blind index** to find the row (`users.email` is
+  ciphertext), so `ENCRYPTION_KEYRING` / `ENCRYPTION_ACTIVE_KEY_ID` / `ENCRYPTION_BLIND_INDEX_KEY`
+  must match the target environment or nothing will match. Connects via `DATABASE_MIGRATE_URL`
+  (`db_admin`) with a `DATABASE_URL` fallback, and prints the target `host/db` before mutating.
+- Writes an `admin.user.email.verify` audit row with `metadata.via = "verify-email-script"` —
+  deliberately a **different action** from the self-service `auth.email.verify`, so an access review
+  can separate "the user proved this address" from "an operator asserted it".
+- Consumes any outstanding verification tokens for that user: the address is now verified, so a live
+  link sitting in an inbox is a credential with nothing left to authorize.
+- Already-verified and unknown-address cases are no-ops (exit `0` and `1` respectively, with a
+  message). `--dry-run` reports without writing.
+
+> **This asserts an address; it does not prove one.** Use it only when delivery is known-broken and
+> the account holder's identity is established some other way. The normal recovery is
+> `POST /auth/resend-verification`.
+
 ## JWT secret rotation
 
 `JWT_SECRET` signs and verifies every access token (HS256). Rotating it is a SOC 2 CC6.1 key-management
@@ -353,11 +448,15 @@ app is still stopped:
    - the **erasure register** (the DSAR / support tracker where deletion requests are logged). This
      register is the interim system of record precisely because it survives a DB rollback — keep it
      current for every `DELETE /user/me`.
-2. **Re-erase each user id** against the restored DB. `UserService.deleteAccount(userId)` performs the
-   same audit-then-delete-with-cascade and does **not** require the user's password (only the HTTP route
-   does), so an operator script — e.g. `scripts/erase-users.ts <userId…>` — can replay the list and write
-   a fresh `user.delete` audit row per user documenting the re-erasure. (No admin delete endpoint exists
-   yet; the script/direct-service path is the mechanism until RBAC lands.)
+2. **Re-erase each user id** against the restored DB. Two mechanisms, both audited:
+   - **`DELETE /admin/users/:id`** as an admin — audits `admin.user.delete` and cascades todos, refresh
+     tokens and verification tokens. Requires the app to be reachable by an admin but not yet serving
+     users; run it against the restored DB before repointing public traffic.
+   - **Direct service call** — `UserService.adminDeleteUser(userId)` / `deleteAccount(userId)` perform the
+     same audit-then-delete-with-cascade and do **not** require the user's password (only the HTTP
+     `/user/me` route does). An operator script that loops the replay list has not been written; until it
+     exists, use the admin endpoint or a one-off `node --input-type=module` call with the app env loaded.
+     Whichever path you take, each erasure writes a fresh audit row documenting the re-erasure.
 3. **Verify** none of the replayed ids resolve: for each, `SELECT 1 FROM users WHERE id = '<id>'` returns
    0 rows, and `SELECT count(*) FROM todos WHERE user_id = '<id>'` is 0.
 4. **Record it** in the restore evidence report (which ids were replayed, from which register, against

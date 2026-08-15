@@ -11,7 +11,23 @@ The application uses `envalid` to validate all environment variables at startup,
 - Clear error messages with examples for misconfigured values
 - Prevents runtime failures due to configuration issues
 
-**Implementation**: See `src/config/env.ts` for the validation schema and `.env.example` for a template.
+**Implementation**: See `src/config/env.ts` for the validation schema and `.env.example` for a template. `__tests__/unit/env-example-guard.test.ts` fails CI if the two drift apart in either direction, so every variable below has a counterpart in `.env.example`.
+
+### Cross-field startup invariants
+
+`envalid` validates one variable at a time. Three relationships between variables are checked
+separately (`assertEnvInvariants`) and abort startup in **every** environment — each one degrades
+behavior silently at runtime rather than failing at the point of use:
+
+| Invariant                                 | Why it aborts the boot                                                                                                                                                                           |
+| ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `SHUTDOWN_TIMEOUT_MS > SHUTDOWN_DELAY_MS` | The force-exit timer is armed _before_ the drain delay, so a timeout at or below the delay turns every shutdown into a forced `exit(1)` with no drain window                                     |
+| `DB_POOL_MIN <= DB_POOL_MAX`              | `pg` accepts `min > max` and then never reaps down to it                                                                                                                                         |
+| `JWT_SECRET_PREVIOUS != JWT_SECRET`       | Identical values read as an in-progress rotation while verifying nothing the current secret doesn't already cover — see [operations.md → JWT secret rotation](operations.md#jwt-secret-rotation) |
+
+A separate set of checks (`assertProductionEnv`) applies only when `NODE_ENV=production`: see
+[Metrics](#metrics), [Encryption at rest](#encryption-at-rest), [Email Verification & Outbound
+Mail](#email-verification--outbound-mail), and [Debug & Benchmark Routes](#debug--benchmark-routes).
 
 ## Required Variables
 
@@ -116,6 +132,7 @@ committed: `.env*` is gitignored (only `.env.example` / `.env.test` placeholders
 | `DATABASE_URL` / `DATABASE_MIGRATE_URL`                                 | Railway managed reference     | The app / migration step; project members with Railway access       |
 | `ENCRYPTION_KEYRING`, `ENCRYPTION_ACTIVE_KEY_ID`, `..._BLIND_INDEX_KEY` | Railway per-env variable      | The running app service; project members with Railway secret access |
 | `METRICS_TOKEN`                                                         | Railway per-env variable      | The app; operators scraping `/metrics`                              |
+| `RESEND_API_KEY`                                                        | Railway per-env variable      | The running app service; project members with Railway secret access |
 | `PGBACKREST_CIPHER_PASS` + S3 keys                                      | Railway (timescaledb service) | The DB container; project members with Railway access               |
 | `RAILWAY_TOKEN` (staging / production)                                  | GitHub Environment secret     | The deploy workflow only; production gated by required reviewer     |
 | `CODECOV_TOKEN`                                                         | GitHub Actions secret         | CI only                                                             |
@@ -148,13 +165,13 @@ Review the member list and key access **quarterly** alongside the restore-drill 
 
 ### Authentication
 
-| Variable                    | Type   | Default            | Description                                                                                                                                                                                                                                                                       |
-| --------------------------- | ------ | ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `JWT_ISSUER`                | String | `todo-api`         | JWT `iss` claim. Set the same value on the sign and verify sides.                                                                                                                                                                                                                 |
-| `JWT_SECRET_PREVIOUS`       | String | _(unset)_          | Previous signing secret, accepted on **verify only** during a rotation window so in-flight tokens survive the cutover. **Minimum 32 chars** when set. Clear it after `ACCESS_TOKEN_EXPIRY` elapses. See [operations.md → JWT secret rotation](operations.md#jwt-secret-rotation). |
-| `JWT_AUDIENCE`              | String | `todo-api-clients` | JWT `aud` claim. Set the same value on the sign and verify sides.                                                                                                                                                                                                                 |
-| `ACCESS_TOKEN_EXPIRY`       | String | `15m`              | Access-token lifetime (`jsonwebtoken` `expiresIn`, e.g. `15m`, `1h`). Kept short because stateless JWTs cannot be individually revoked — refresh tokens cover sessions.                                                                                                           |
-| `REFRESH_TOKEN_EXPIRY_DAYS` | Number | `30`               | Refresh-token lifetime in days. Refresh tokens rotate on every `POST /auth/refresh`; this absolute cap bounds a stolen-but-unused token.                                                                                                                                          |
+| Variable                    | Type   | Default            | Description                                                                                                                                                                                                                                                                                                                                               |
+| --------------------------- | ------ | ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `JWT_ISSUER`                | String | `todo-api`         | JWT `iss` claim. Set the same value on the sign and verify sides.                                                                                                                                                                                                                                                                                         |
+| `JWT_SECRET_PREVIOUS`       | String | _(unset)_          | Previous signing secret, accepted on **verify only** during a rotation window so in-flight tokens survive the cutover. **Minimum 32 chars** when set, and **must differ from `JWT_SECRET`** — identical values abort startup. Clear it after `ACCESS_TOKEN_EXPIRY` elapses. See [operations.md → JWT secret rotation](operations.md#jwt-secret-rotation). |
+| `JWT_AUDIENCE`              | String | `todo-api-clients` | JWT `aud` claim. Set the same value on the sign and verify sides.                                                                                                                                                                                                                                                                                         |
+| `ACCESS_TOKEN_EXPIRY`       | String | `15m`              | Access-token lifetime (`jsonwebtoken` `expiresIn`, e.g. `15m`, `1h`). Kept short because stateless JWTs cannot be individually revoked — refresh tokens cover sessions.                                                                                                                                                                                   |
+| `REFRESH_TOKEN_EXPIRY_DAYS` | Number | `30`               | Refresh-token lifetime in days. Refresh tokens rotate on every `POST /auth/refresh`; this absolute cap bounds a stolen-but-unused token.                                                                                                                                                                                                                  |
 
 ### Logging
 
@@ -164,10 +181,13 @@ Review the member list and key access **quarterly** alongside the restore-drill 
 
 ### Shutdown
 
-| Variable              | Type   | Default | Description                                                |
-| --------------------- | ------ | ------- | ---------------------------------------------------------- |
-| `SHUTDOWN_DELAY_MS`   | Number | `5000`  | ms to wait after SIGTERM before closing (K8s drain window) |
-| `SHUTDOWN_TIMEOUT_MS` | Number | `10000` | Force-exit if graceful drain exceeds this duration         |
+| Variable              | Type   | Default | Description                                                                                                                                                                                |
+| --------------------- | ------ | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `SHUTDOWN_DELAY_MS`   | Number | `5000`  | ms to wait after SIGTERM before closing (K8s drain window)                                                                                                                                 |
+| `SHUTDOWN_TIMEOUT_MS` | Number | `10000` | Force-exit if graceful drain exceeds this duration. **Must exceed `SHUTDOWN_DELAY_MS`** — startup aborts otherwise (see [Cross-field startup invariants](#cross-field-startup-invariants)) |
+
+Shutdown order: arm the force-exit timer → sleep `SHUTDOWN_DELAY_MS` → `closeIdleConnections()` →
+await `server.close()` → close Redis (2s cap, then `destroy()`) → `prisma.$disconnect()` → exit.
 
 ### Database Pool
 
@@ -176,7 +196,7 @@ Pool sizing rule: `DB_POOL_MAX × replica_count × CLUSTER_WORKERS` must stay we
 | Variable                      | Type   | Default | Description                                                                                                                                |
 | ----------------------------- | ------ | ------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
 | `DB_POOL_MAX`                 | Number | `10`    | Max connections per instance                                                                                                               |
-| `DB_POOL_MIN`                 | Number | `2`     | Min idle connections to keep warm                                                                                                          |
+| `DB_POOL_MIN`                 | Number | `2`     | Min idle connections to keep warm. **Must not exceed `DB_POOL_MAX`** — startup aborts otherwise                                            |
 | `DB_CONNECTION_TIMEOUT_MS`    | Number | `5000`  | ms to wait for a free pool connection                                                                                                      |
 | `DB_IDLE_TIMEOUT_MS`          | Number | `10000` | ms before an idle connection is released                                                                                                   |
 | `DB_QUERY_TIMEOUT_MS`         | Number | `5000`  | ms a single query may run before the connection is killed and returned to the pool                                                         |
@@ -288,12 +308,13 @@ Store the value in your secrets manager (see the **Secrets Management** section 
 
 ### Email Verification & Outbound Mail
 
-| Variable                          | Type   | Default                 | Description                                                                                                                                |
-| --------------------------------- | ------ | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| `RESEND_API_KEY`                  | String | _(unset)_               | Resend API key. **Required in production.** Unset selects the dev log transport, which prints the verification link instead of sending it. |
-| `MAIL_FROM`                       | String | _(unset)_               | From address, e.g. `Todo API <noreply@example.com>`. **Required in production.**                                                           |
-| `APP_BASE_URL`                    | String | `http://localhost:3000` | Public origin of the frontend; verification links are `<APP_BASE_URL>/verify-email?token=…`. Must not be localhost in production.          |
-| `VERIFICATION_TOKEN_EXPIRY_HOURS` | Number | `24`                    | Verification link lifetime. Single use; issuing a new token invalidates any outstanding one for that account.                              |
+| Variable                                      | Type    | Default                 | Description                                                                                                                                                                   |
+| --------------------------------------------- | ------- | ----------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `RESEND_API_KEY`                              | String  | _(unset)_               | Resend API key. **Required in production.** Unset selects the dev log transport, which prints the verification link instead of sending it.                                    |
+| `MAIL_FROM`                                   | String  | _(unset)_               | From address, e.g. `Todo API <noreply@example.com>`. **Required in production.**                                                                                              |
+| `APP_BASE_URL`                                | String  | `http://localhost:3000` | Public origin of the frontend; verification links are `<APP_BASE_URL>/verify-email?token=…`. Must not be localhost in production.                                             |
+| `VERIFICATION_TOKEN_EXPIRY_HOURS`             | Number  | `24`                    | Verification link lifetime. Single use; issuing a new token invalidates any outstanding one for that account.                                                                 |
+| `ALLOW_LOG_MAIL_TRANSPORT_PRODUCTION_CONFIRM` | Boolean | `false`                 | Lets `NODE_ENV=production` boot without mail config (log transport + localhost `APP_BASE_URL`). For production-mode stacks serving no real users only; logs a loud `WARNING`. |
 
 Production refuses to boot without `RESEND_API_KEY`, `MAIL_FROM`, and a non-localhost
 `APP_BASE_URL`. That is deliberate: login is gated on verification, so a silent fallback to the log
@@ -301,9 +322,24 @@ transport would leave every new production account permanently unusable with not
 request path. Watch `verification_email_failures_total` — a sustained non-zero rate means users are
 signing up and never receiving a link.
 
+**The one exception** is a stack that runs in production mode but serves no real users — the
+`docker-compose` stack, an e2e environment — where the log transport _is_ the intended transport and
+the verification link is read out of the container log. Setting
+`ALLOW_LOG_MAIL_TRANSPORT_PRODUCTION_CONFIRM=true` relaxes the mail checks and the
+localhost-`APP_BASE_URL` check together (they only make sense together) and logs a `WARNING` for as
+long as it is set. Same paired-flag shape as `DISABLE_RATE_LIMIT_PRODUCTION_CONFIRM`. Never set it on
+a user-serving deploy: every account created there would be stranded unverified.
+
 Mail is sent through the `Mailer` interface in `src/lib/mailer.ts`, not a vendor SDK — the Resend
 adapter is a single `fetch` POST, so swapping to SES/SMTP is a new adapter plus one line in
-`createMailer()`, with no route or model changes.
+`createMailer()`, with no route or model changes. Three messages go out: the signup verification
+link, the confirmation link for an address **change** (sent to the new address), and the notice sent
+to the **old** address once a change completes. All three count failures into
+`verification_email_failures_total`.
+
+`VERIFICATION_TOKEN_EXPIRY_HOURS` governs both token types. Change tokens live in their own table
+(`email_change_tokens`) with the pending address stored as ciphertext + blind index, so a signup
+token can never be redeemed at the change endpoint or vice versa.
 
 ### Rate Limiting
 
@@ -312,7 +348,7 @@ adapter is a single `fetch` POST, so swapping to SES/SMTP is a new adapter plus 
 | `DISABLE_RATE_LIMIT`                    | Boolean | `false` | Disables all rate limiters. Use when running load tests/benchmarks. In production, must be paired with `DISABLE_RATE_LIMIT_PRODUCTION_CONFIRM=true` — startup aborts otherwise; with both set, startup logs a loud `WARNING`. |
 | `DISABLE_RATE_LIMIT_PRODUCTION_CONFIRM` | Boolean | `false` | Confirmation flag required to set `DISABLE_RATE_LIMIT=true` in production. Both must be `true`; either alone fails startup. Intended only for dedicated benchmark processes that serve no real traffic.                       |
 
-All rate limiters (`auth`, `login-email`, `login-ip`, `write`, `read`, `global`, `register`, `health`, `refresh`, `user-export`) emit the IETF `draft-7` `RateLimit-*` response headers (`RateLimit-Limit`, `RateLimit-Remaining`, `RateLimit-Reset`, and `Retry-After` on 429s). Legacy `X-RateLimit-*` headers are not emitted.
+All rate limiters (`auth`, `login-email`, `login-ip`, `write`, `read`, `global`, `register`, `health`, `refresh`, `user-export`, `verify-email`, `resend-verification`, `email-change`) emit the IETF `draft-7` `RateLimit-*` response headers (`RateLimit-Limit`, `RateLimit-Remaining`, `RateLimit-Reset`, and `Retry-After` on 429s). Legacy `X-RateLimit-*` headers are not emitted.
 
 `/user/me/export` is rate-limited at **5 requests/hour/user** (`exportLimiter`) rather than by the generic read cap: it loads the caller's full todo history into memory, so the cost is in replaying the request, not in any single response. It is keyed by `req.userId` so the bound follows the account whose data is read.
 
@@ -439,6 +475,18 @@ ENCRYPTION_KEYRING=k1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
 ENCRYPTION_ACTIVE_KEY_ID=k1
 ENCRYPTION_BLIND_INDEX_KEY=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
 
+# Outbound mail / email verification. Leave the first two unset locally: the log
+# transport prints the verification link instead of sending it. Production
+# requires both plus a non-localhost APP_BASE_URL.
+# RESEND_API_KEY=re_xxxxxxxxxxxxxxxxxxxxxxxx
+# MAIL_FROM=Todo API <noreply@example.com>
+APP_BASE_URL=http://localhost:3000
+# VERIFICATION_TOKEN_EXPIRY_HOURS=24
+# ALLOW_LOG_MAIL_TRANSPORT_PRODUCTION_CONFIRM=false  # Only for prod-mode stacks with no real users
+
+# Proxy hops Express trusts when deriving req.ip (rate-limit keys, audit sourceIp)
+TRUST_PROXY=1
+
 # HTTP Request Body Limit
 BODY_LIMIT=16kb
 
@@ -471,8 +519,9 @@ DB_IDLE_TIMEOUT_MS=10000
 # Cluster (optional)
 # CLUSTER_WORKERS=0  # 0 = auto-detect CPU count
 
-# Metrics (optional)
-# METRICS_TOKEN=     # Bearer token to protect GET /metrics
+# Metrics — required in production (32+ chars). Set here (not commented out)
+# because docker-compose interpolates it with ${METRICS_TOKEN:?…}.
+METRICS_TOKEN=dev-metrics-token-change-me-min-32-chars
 # DISABLE_DB_METRICS=false # Set true when running benchmarks
 
 # Rate Limiting

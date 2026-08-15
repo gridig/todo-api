@@ -5,12 +5,10 @@ import { encryptField, decryptField, blindIndex } from '../lib/crypto/fieldCrypt
 import auditLog from '../lib/auditLog.js';
 import { AuditAction } from '../lib/auditActions.js';
 import { DuplicateEmailError, UserNotFoundError } from '../errors/index.js';
+// On the users table the only unique column is email_hash, so a P2002 here is
+// always a duplicate email.
+import { isUniqueViolation } from '../errors/database.js';
 import type { UserServiceInterface, UserRole, UserProfile } from '../types/index.js';
-
-// P2002 = unique-constraint violation. On the users table the only unique
-// column is email_hash, so a P2002 here is always a duplicate email.
-const isUniqueViolation = (err: unknown): boolean =>
-  typeof err === 'object' && err !== null && (err as { code?: unknown }).code === 'P2002';
 
 // Public profile columns (never password/emailHash). `role` is a String column
 // at rest but constrained to the UserRole domain by users_role_check, so the
@@ -117,9 +115,23 @@ export const UserService: UserServiceInterface = {
   async findByEmail(email) {
     // Look up by the blind index (the email column is randomized ciphertext),
     // then decrypt on read so callers still get the plaintext address.
+    //
+    // Selects the password hash, so this is the LOGIN lookup specifically —
+    // callers that only need identity or verification state should use
+    // findVerificationStateByEmail instead of loading the hash they won't use.
     const user = await prisma.user.findUnique({
       where: { emailHash: blindIndex(email) },
       select: { id: true, email: true, password: true, emailVerifiedAt: true },
+    });
+    return user ? { ...user, email: decryptField(user.email) } : null;
+  },
+
+  // Same lookup, minus the password hash: the resend-verification path needs an
+  // address to mail and a flag to decide whether to bother, and nothing else.
+  async findVerificationStateByEmail(email) {
+    const user = await prisma.user.findUnique({
+      where: { emailHash: blindIndex(email) },
+      select: { id: true, email: true, emailVerifiedAt: true },
     });
     return user ? { ...user, email: decryptField(user.email) } : null;
   },

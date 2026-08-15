@@ -1,6 +1,11 @@
 import bcrypt from 'bcrypt';
 
-const SALT_ROUNDS = 10;
+// Defaults to the cost the app actually hashes with (UserService.SALT_ROUNDS =
+// 12), so the number reported here is the real per-login cost rather than a
+// cheaper synthetic one. Override with BCRYPT_ROUNDS when comparing against an
+// implementation pinned to a different cost — the comparison is only meaningful
+// when both sides use the same value.
+const SALT_ROUNDS = Number(process.env.BCRYPT_ROUNDS ?? 12);
 const PASSWORD = 'BenchPass1!';
 const ITERATIONS = 10;
 

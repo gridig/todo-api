@@ -183,6 +183,11 @@ export const env = cleanEnv(process.env, {
     example: 'https://app.example.com',
   }),
 
+  ALLOW_LOG_MAIL_TRANSPORT_PRODUCTION_CONFIRM: bool({
+    default: false,
+    desc: 'Confirmation flag allowing NODE_ENV=production to boot without real mail config (log transport + localhost APP_BASE_URL). For production-mode stacks that serve no real users — docker-compose, e2e — where the verification link is read from the log. Never set it on a user-serving deploy: every account would be stranded unverified.',
+  }),
+
   // Field-level encryption (see docs/configuration.md → "Encryption at rest").
   // All three are required in every environment (like JWT_SECRET) so the app
   // never silently starts without a key. Dev/test use the committed placeholder
@@ -436,6 +441,7 @@ export interface ProductionAssertionInput {
   RESEND_API_KEY?: string | undefined;
   MAIL_FROM?: string | undefined;
   APP_BASE_URL?: string | undefined;
+  ALLOW_LOG_MAIL_TRANSPORT_PRODUCTION_CONFIRM: boolean;
   DISABLE_RATE_LIMIT: boolean;
   DISABLE_RATE_LIMIT_PRODUCTION_CONFIRM: boolean;
   ENABLE_ECHO_ROUTES: boolean;
@@ -504,15 +510,31 @@ export function assertProductionEnv(cfg: ProductionAssertionInput): ProductionAs
   // which would silently drop every verification email — and since login is
   // gated on verification, every new production account would be unusable with
   // no error anywhere. Fail at boot instead.
-  if (!cfg.RESEND_API_KEY || !cfg.MAIL_FROM) {
-    errors.push(
-      'RESEND_API_KEY and MAIL_FROM are required in production (without them the mailer falls back to the log transport and no user can ever verify their address)',
-    );
-  }
-  if (!cfg.APP_BASE_URL || cfg.APP_BASE_URL.startsWith('http://localhost')) {
-    errors.push(
-      'APP_BASE_URL must be the real public origin in production (verification links are built from it)',
-    );
+  //
+  // The confirm flag exists because a production-mode stack that serves no real
+  // users is a legitimate configuration (docker-compose, e2e): there the log
+  // transport IS the intended transport, and the verification link is read out
+  // of the container log. Same paired-flag shape as DISABLE_RATE_LIMIT.
+  const mailUnconfigured = !cfg.RESEND_API_KEY || !cfg.MAIL_FROM;
+  const baseUrlIsLocal = !cfg.APP_BASE_URL || cfg.APP_BASE_URL.startsWith('http://localhost');
+
+  if (cfg.ALLOW_LOG_MAIL_TRANSPORT_PRODUCTION_CONFIRM) {
+    if (mailUnconfigured || baseUrlIsLocal) {
+      warnings.push(
+        'ALLOW_LOG_MAIL_TRANSPORT_PRODUCTION_CONFIRM=true in production. Verification emails are printed to the log, not sent — this process must not serve real users.',
+      );
+    }
+  } else {
+    if (mailUnconfigured) {
+      errors.push(
+        'RESEND_API_KEY and MAIL_FROM are required in production (without them the mailer falls back to the log transport and no user can ever verify their address). For a production-mode stack that serves no real users, set ALLOW_LOG_MAIL_TRANSPORT_PRODUCTION_CONFIRM=true instead.',
+      );
+    }
+    if (baseUrlIsLocal) {
+      errors.push(
+        'APP_BASE_URL must be the real public origin in production (verification links are built from it)',
+      );
+    }
   }
 
   return { errors, warnings };

@@ -22,6 +22,12 @@ const hasPrismaCode = (err: unknown): err is PrismaLikeError =>
   'code' in err &&
   typeof (err as { code: unknown }).code === 'string';
 
+// P2002 = unique-constraint violation. Lives here rather than in one model so
+// every caller that races a unique index (users.email_hash from registration,
+// profile update, and email-change redemption) tests it the same way.
+export const isUniqueViolation = (err: unknown): boolean =>
+  hasPrismaCode(err) && err.code === 'P2002';
+
 // Map Prisma error codes to typed AppErrors.
 // Returns null for codes the existing errorHandler already handles with richer
 // context (P2002 → DuplicateEmail/DuplicateValue field detection, P2025 →

@@ -25,6 +25,10 @@ const seed = async () => {
         email: encryptField(normalized),
         emailHash: blindIndex(normalized),
         password: hashedPassword,
+        // Pre-verified: login refuses tokens for an unverified address, so
+        // without this the k6 setup() login 403s and every app benchmark aborts.
+        // The verification flow is deliberately outside what these runs measure.
+        emailVerifiedAt: new Date(),
       },
     });
 

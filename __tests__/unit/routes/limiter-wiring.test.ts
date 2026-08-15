@@ -7,6 +7,7 @@ import { auth } from '@/middleware/auth.js';
 import { requireAdmin } from '@/middleware/authorize.js';
 import {
   authLimiter,
+  emailChangeLimiter,
   loginEmailLimiter,
   loginIpLimiter,
   exportLimiter,
@@ -73,6 +74,12 @@ describe('route middleware wiring', () => {
       );
     });
 
+    it('POST /verify-email-change mounts verifyEmailLimiter', () => {
+      expect(findRoute(authRoutes, 'post', '/verify-email-change').handlers).toContain(
+        verifyEmailLimiter,
+      );
+    });
+
     it('POST /refresh and /logout mount refreshLimiter', () => {
       expect(findRoute(authRoutes, 'post', '/refresh').handlers).toContain(refreshLimiter);
       expect(findRoute(authRoutes, 'post', '/logout').handlers).toContain(refreshLimiter);
@@ -111,6 +118,12 @@ describe('route middleware wiring', () => {
       const { handlers } = findRoute(userRoutes, method as string, path as string);
       expect(handlers).toContain(auth);
       expect(handlers).toContain(limiter);
+    });
+
+    it('PATCH /me/email also mounts the per-address email-change limiter', () => {
+      // writeLimiter bounds the caller; this one bounds mail sent to the address
+      // the caller names, which is the abuse that reaches someone else's inbox.
+      expect(findRoute(userRoutes, 'patch', '/me/email').handlers).toContain(emailChangeLimiter);
     });
   });
 

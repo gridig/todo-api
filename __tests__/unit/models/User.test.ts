@@ -40,6 +40,44 @@ describe('User Service', () => {
     expect(found?.email).toBe('test@example.com');
   });
 
+  describe('findVerificationStateByEmail', () => {
+    it('returns identity and verification state without the password hash', async () => {
+      const created = await UserService.create({
+        email: 'verification-state@example.com',
+        password: 'TestPassword123!',
+      });
+
+      const found = await UserService.findVerificationStateByEmail(
+        'verification-state@example.com',
+      );
+
+      expect(found).toEqual({
+        id: created.id,
+        email: 'verification-state@example.com',
+        emailVerifiedAt: null,
+      });
+      // The point of the separate method: no bcrypt hash in memory on a path
+      // that never compares one.
+      expect(found).not.toHaveProperty('password');
+    });
+
+    it('reflects the verified timestamp once set', async () => {
+      const created = await UserService.create({
+        email: 'verified-state@example.com',
+        password: 'TestPassword123!',
+      });
+      await UserService.markEmailVerified(created.id);
+
+      const found = await UserService.findVerificationStateByEmail('verified-state@example.com');
+
+      expect(found?.emailVerifiedAt).toBeInstanceOf(Date);
+    });
+
+    it('returns null for an unknown address', async () => {
+      expect(await UserService.findVerificationStateByEmail('nobody@example.com')).toBeNull();
+    });
+  });
+
   it('should normalize email to lowercase', async () => {
     const user = await UserService.create({
       email: 'TEST@EXAMPLE.COM',

@@ -1,6 +1,17 @@
 # Runtime Correctness Plan
 
-Three areas where the current implementation diverges from correct production behavior, identified during a structured review against common Node.js production patterns. These are not feature gaps — they are correctness bugs or consistency failures that affect any deployment. They should be resolved before Phase A begins.
+> **Status: historical — all three items are implemented.** This is the original remediation plan,
+> kept for the reasoning behind the shutdown sequence, the pool wiring, and the single error-response
+> shape. It is **not** a to-do list, and its "Roadmap item #12/#15/#16" cross-references point at a
+> ROADMAP numbering that no longer exists. The live plan is [../ROADMAP.md](../ROADMAP.md).
+>
+> Where the shipped code has moved past this document: graceful shutdown also drains the Redis client
+> (2s cap, then `destroy()`) and flushes Pino before a fatal exit; pool settings gained
+> `DB_QUERY_TIMEOUT_MS`, a dedicated readiness-probe pool, and boot-time invariant checks
+> (`SHUTDOWN_TIMEOUT_MS > SHUTDOWN_DELAY_MS`, `DB_POOL_MIN <= DB_POOL_MAX`). See
+> [configuration.md](configuration.md).
+
+Three areas where the implementation diverged from correct production behavior, identified during a structured review against common Node.js production patterns. These were not feature gaps — they were correctness bugs or consistency failures affecting any deployment, and were resolved before Phase A began.
 
 ## Summary
 

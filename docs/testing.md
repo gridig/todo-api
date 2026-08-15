@@ -55,23 +55,26 @@ __tests__/
 │   ├── todos.test.ts               # Todo endpoint integration tests
 │   ├── admin/                      # /admin surface: authorization, list-users,
 │   │                               #   get-user, update-role, delete-user
-│   ├── auth/                       # refresh, logout, logout-all
+│   ├── auth/                       # email-verification, refresh, logout, logout-all
 │   ├── todos/                      # Per-endpoint CRUD: create, delete,
 │   │                               #   get-single, get-all, update
-│   └── user/                       # /user/me: get-me, update-profile, change-email,
-│                                   #   change-password, delete-account, export
+│   └── user/                       # /user/me: get-me, update-profile, change-email
+│                                   #   (request + redemption), change-password,
+│                                   #   delete-account, export
 └── unit/
     ├── migrations-guard.test.ts    # Blocks migrations touching audit_entries
     ├── schema-cascade-guard.test.ts # Guards FK cascade declarations in the schema
+    ├── env-example-guard.test.ts   # Keeps .env.example in sync with config/env.ts
+    │                               #   (both directions: undocumented + stale)
     ├── config/                     # env-production assertions, cross-field env invariants
-    ├── lib/                        # dbConnect, fieldCrypto, retry, tokens
+    ├── lib/                        # dbConnect, fieldCrypto, mailer, retry, tokens
     ├── middleware/                 # auth, cors-helpers, errorHandler, metricsAuth,
     │                               #   metricsAuthDisabled, loggerRedaction,
     │                               #   rateLimiter (+ Redis store/fallback),
     │                               #   requestId, requestLogger, validation
-    ├── models/                     # Todo, User, deleteMany-guard
+    ├── models/                     # Todo, User, EmailChangeToken, deleteMany-guard
     ├── routes/                     # auth-helpers, limiter-wiring
-    └── scripts/                    # preflight-roles, promote-admin
+    └── scripts/                    # preflight-roles, promote-admin, verify-email
 ```
 
 ## Coverage Requirements
@@ -93,17 +96,18 @@ Run `pnpm run test:coverage` to generate a report.
 
 ### `testSetup.ts`
 
-| Function                          | Purpose                                                                                                                                        |
-| --------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| `generateUniqueId()`              | Returns a `crypto.randomUUID()` for test isolation                                                                                             |
-| `createTestApp()`                 | Returns the Express `Application` instance                                                                                                     |
-| `createTestUser(email?)`          | Creates a user + JWT token, returns `{ user, authToken, userId }`                                                                              |
-| `createTestAdmin(email?)`         | Like `createTestUser`, then sets the user's role to `admin` (same return shape) — use for `/admin` route tests                                 |
-| `connectTestDB()`                 | Connects Prisma to the test database                                                                                                           |
-| `disconnectTestDB()`              | Disconnects Prisma and closes the connection pool (incl. the privileged audit-admin pool)                                                      |
-| `cleanupTestData()`               | Deletes refresh tokens, then todos, then users (respects FK constraints)                                                                       |
-| `truncateAuditEntries()`          | `TRUNCATE audit_entries` via a privileged admin pool — the runtime `db_app` role can't; call in `afterEach` for suites asserting on audit rows |
-| `pollForAuditRow(where, params?)` | Polls `audit_entries` for a matching row (audit writes are fire-and-forget, so the row may lag the HTTP response)                              |
+| Function                                        | Purpose                                                                                                                                                                                                                                                |
+| ----------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `generateUniqueId()`                            | Returns a `crypto.randomUUID()` for test isolation                                                                                                                                                                                                     |
+| `createTestApp()`                               | Returns the Express `Application` instance                                                                                                                                                                                                             |
+| `createTestUser(email?, opts?)`                 | Creates a user + JWT token, returns `{ user, authToken, userId }`. **Marked email-verified by default** — login refuses tokens otherwise. Pass `{ verified: false }` for a freshly-registered, inert account                                           |
+| `createTestAdmin(email?)`                       | Like `createTestUser`, then sets the user's role to `admin` (same return shape) — use for `/admin` route tests                                                                                                                                         |
+| `registerVerifyAndLogin(app, email, password?)` | Full public-route signup: `POST /auth/register` → mint + redeem a verification token via `POST /auth/verify` → `POST /auth/login`. Returns `{ token, refreshToken, userId }`. Use when the test needs the real HTTP path rather than a fabricated user |
+| `connectTestDB()`                               | Connects Prisma to the test database                                                                                                                                                                                                                   |
+| `disconnectTestDB()`                            | Disconnects Prisma and closes the connection pool (incl. the privileged audit-admin pool)                                                                                                                                                              |
+| `cleanupTestData()`                             | Deletes refresh tokens, then todos, then users (respects FK constraints; verification tokens cascade with the user)                                                                                                                                    |
+| `truncateAuditEntries()`                        | `TRUNCATE audit_entries` via a privileged admin pool — the runtime `db_app` role can't; call in `afterEach` for suites asserting on audit rows                                                                                                         |
+| `pollForAuditRow(where, params?)`               | Polls `audit_entries` for a matching row (audit writes are fire-and-forget, so the row may lag the HTTP response)                                                                                                                                      |
 
 ### `todoHelpers.ts`
 
@@ -224,15 +228,18 @@ Create a `.env.test` file in the project root with the following variables:
 
 ### Optional (have defaults)
 
-| Variable           | Default                            | Description                                                                                                                                     |
-| ------------------ | ---------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| `PORT`             | `3001`                             | Server port (tests use Supertest, so the port is not bound)                                                                                     |
-| `CORS_CREDENTIALS` | `false`                            | Allow credentials in CORS                                                                                                                       |
-| `CORS_METHODS`     | `GET,HEAD,POST,PATCH,DELETE`       | Allowed HTTP methods                                                                                                                            |
-| `CORS_HEADERS`     | `Content-Type,Authorization`       | Allowed HTTP headers                                                                                                                            |
-| `CORS_MAX_AGE`     | `86400`                            | Preflight cache duration (seconds)                                                                                                              |
-| `LOG_LEVEL`        | Auto-determined (`silent` in test) | Logging level                                                                                                                                   |
-| `METRICS_TOKEN`    | _(unset)_                          | Bearer token for `GET /metrics` and `GET /health/ready/detailed` — the metrics and detailed-readiness integration tests need it set (32+ chars) |
+| Variable                          | Default                            | Description                                                                                                                                                              |
+| --------------------------------- | ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `PORT`                            | `3001`                             | Server port (tests use Supertest, so the port is not bound)                                                                                                              |
+| `CORS_CREDENTIALS`                | `false`                            | Allow credentials in CORS                                                                                                                                                |
+| `CORS_METHODS`                    | `GET,HEAD,POST,PATCH,DELETE`       | Allowed HTTP methods                                                                                                                                                     |
+| `CORS_HEADERS`                    | `Content-Type,Authorization`       | Allowed HTTP headers                                                                                                                                                     |
+| `CORS_MAX_AGE`                    | `86400`                            | Preflight cache duration (seconds)                                                                                                                                       |
+| `LOG_LEVEL`                       | Auto-determined (`silent` in test) | Logging level                                                                                                                                                            |
+| `METRICS_TOKEN`                   | _(unset)_                          | Bearer token for `GET /metrics` and `GET /health/ready/detailed` — the metrics and detailed-readiness integration tests need it set (32+ chars)                          |
+| `RESEND_API_KEY` / `MAIL_FROM`    | _(unset)_                          | **Leave unset.** Unset selects the log mail transport, so no test ever reaches a third-party API. The production requirement for these does not apply at `NODE_ENV=test` |
+| `APP_BASE_URL`                    | `http://localhost:3000`            | Only affects the link text inside the verification email; tests redeem tokens directly via `POST /auth/verify`                                                           |
+| `VERIFICATION_TOKEN_EXPIRY_HOURS` | `24`                               | Expiry-path tests set the row's `expires_at` directly rather than changing this                                                                                          |
 
 ### Minimal `.env.test`
 

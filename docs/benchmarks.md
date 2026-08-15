@@ -126,7 +126,7 @@ When comparing against alternative implementations, run the same queries through
 pnpm bench:bcrypt
 ```
 
-Runs a warm-up iteration followed by 10 timed iterations of bcrypt hash + compare with 10 salt rounds and reports avg/min/max in milliseconds. Since bcrypt work happens in C (libcrypt), wall-clock time should be nearly identical across language runtimes. Significant deviation indicates a library issue or missing thread offloading.
+Runs a warm-up iteration followed by 10 timed iterations of bcrypt hash + compare and reports avg/min/max in milliseconds. The cost defaults to **12 rounds — the value the app hashes with** (`SALT_ROUNDS` in `src/models/User.ts`), so the number is the real per-login cost. Set `BCRYPT_ROUNDS` to compare against an implementation pinned to a different cost; the comparison only means anything when both sides use the same value. Since bcrypt work happens in C (libcrypt), wall-clock time should be nearly identical across language runtimes. Significant deviation indicates a library issue or missing thread offloading.
 
 ### Rate Limiting
 
@@ -169,6 +169,8 @@ pnpm bench:seed
 ```
 
 Creates 10 users (`benchuser0@example.com` through `benchuser9@example.com`) each with 50 todos (500 total). Password for all users: `BenchPass1!`. The script cleans all existing data before seeding to ensure a consistent starting state.
+
+Seeded users are written **pre-verified** (`email_verified_at` set). Login refuses to issue tokens for an unverified address, so without this the k6 `setup()` login would 403 and the whole application-performance run would abort. The email-verification flow is deliberately outside what these runs measure — benchmark numbers cover the authenticated CRUD path only.
 
 The application performance benchmark authenticates as `benchuser0@example.com` by default.
 
@@ -225,6 +227,13 @@ When comparing against alternative implementations (e.g., Python/FastAPI, Go):
 | `pnpm bench:bcrypt`     | bcrypt hash+compare timing verification          |
 
 ## Benchmark Results
+
+> **These numbers are stale — treat them as a shape, not a baseline.** They were recorded before
+> several changes to the measured path: `toggle`/`delete` moved to single `UPDATE/DELETE…RETURNING`
+> queries (faster), every mutation gained an audit-log insert inside the same `$transaction`
+> (slower), list endpoints gained an `id` sort tiebreaker, and login gained a verified-address check.
+> The net direction is not obvious and has not been re-measured. Re-run `pnpm bench:all` before
+> quoting any figure below or comparing against another implementation.
 
 Results from a local run on macOS (single Node.js process, PostgreSQL). Raw data lives in the JSON files under `benchmarks/results/`. All times are in milliseconds unless noted otherwise.
 

@@ -26,11 +26,11 @@ A production-ready RESTful API for managing todos with user authentication.
 - `src/config/env.ts` - Environment variable validation with envalid
 - `src/types/` - TypeScript type definitions (index.ts, express.d.ts)
 - `src/errors/` - Custom error classes (index.ts; database.ts maps Prisma/pg errors)
-- `src/lib/` - Prisma client, DB connect-with-retry (`dbConnect.ts`, `retry.ts`), access/refresh tokens (`tokens.ts`), field encryption (`crypto/` — `fieldCrypto.ts`, `keyProvider.ts`), email normalization (`normalizeEmail.ts`), audit logging, request context
-- `src/models/` - Prisma models (User, Todo, RefreshToken)
+- `src/lib/` - Prisma client, DB connect-with-retry (`dbConnect.ts`, `retry.ts`), access/refresh/verification tokens (`tokens.ts`), outbound mail (`mailer.ts` — `Mailer` interface, Resend adapter, dev log transport), field encryption (`crypto/` — `fieldCrypto.ts`, `keyProvider.ts`), email normalization (`normalizeEmail.ts`), audit logging, request context
+- `src/models/` - Prisma models (User, Todo, RefreshToken, EmailVerificationToken, EmailChangeToken)
 - `src/routes/` - Express routers (auth, todos, user, admin, health)
 - `src/middleware/` - Auth, authorization (`authorize.ts` — `requireRole` admin guard), validation, rate limiting (+ `rateLimitStore.ts` Redis/memory fallback), logging, error handling
-- `scripts/` - Operator/deploy scripts: `preflight-roles.ts` (pre-deploy role/privilege check, runs before `prisma migrate deploy`), `promote-admin.ts` (grant/revoke the `admin` role by email), `backfill-email-crypto.ts` (email-encryption backfill), `predeploy.ts`
+- `scripts/` - Operator/deploy scripts: `preflight-roles.ts` (pre-deploy role/privilege check, runs before `prisma migrate deploy`), `promote-admin.ts` (grant/revoke the `admin` role by email), `verify-email.ts` (break-glass: mark an address verified when mail delivery is broken), `backfill-email-crypto.ts` (email-encryption backfill), `predeploy.ts`
 
 ## Build and Test Commands
 
@@ -110,7 +110,8 @@ pnpm run start:prod    # Run in production mode
   - `AppError` - Base class for all custom errors
   - `AuthError`, `InvalidCredentialsError`, `NoTokenError`, `InvalidTokenError` - Authentication errors (401)
   - `ValidationError`, `InvalidIdFormatError` - Validation errors (400)
-  - `ForbiddenError` - Authorization errors (403)
+  - `ForbiddenError`, `EmailNotVerifiedError` - Authorization errors (403)
+  - `InvalidVerificationTokenError` - Verification-token redemption failures (400; takes `'invalid' | 'expired' | 'already_used'` and maps to `VERIFICATION_TOKEN_*` codes)
   - `NotFoundError`, `TodoNotFoundError`, `UserNotFoundError`, `RouteNotFoundError` - Not found errors (404)
   - `ConflictError`, `DuplicateEmailError`, `DuplicateValueError` - Conflict errors (409)
   - `RateLimitError` - Rate limit errors (429)
@@ -215,14 +216,25 @@ For the full testing guide (structure, helpers reference, writing tests, databas
    - JWT_SECRET must be strong (32+ characters in production)
    - Tokens validated in `src/middleware/auth.ts`
 
-5. **Rate limiting**
+5. **Email verification**
+   - Registration is sessionless: `POST /auth/register` returns **202 with no tokens** and the account cannot log in until `POST /auth/verify` redeems the emailed token (`403 EMAIL_NOT_VERIFIED` otherwise, checked _after_ the password comparison so it leaks nothing)
+   - Register and resend responses are byte-identical for known and unknown addresses — do not add a distinguishable duplicate-email path, it reopens the account-existence oracle
+   - Tokens are 256-bit, single-use, `VERIFICATION_TOKEN_EXPIRY_HOURS` (default 24); only a SHA-256 hash is stored. Issuing a new token invalidates outstanding ones for that account
+   - Mail goes through the `Mailer` interface (`src/lib/mailer.ts`) — never call a vendor SDK from a route. Unset `RESEND_API_KEY`/`MAIL_FROM` selects the dev log transport; production refuses to boot without them unless `ALLOW_LOG_MAIL_TRANSPORT_PRODUCTION_CONFIRM=true`
+   - Sends are fire-and-forget with failures counted in `verification_email_failures_total` — never block the request on the mail provider
+   - **Changing an address is the same proof, not a shortcut.** `PATCH /user/me/email` re-authenticates with the password and then only _stages_ the address in `EmailChangeToken`; `POST /auth/verify-email-change` (unauthenticated — the link is opened from the new inbox) is what moves the account. The old address stays live until then, and gets a notice once it doesn't. Uniqueness is re-checked at redemption (`409 DUPLICATE_EMAIL`), never trusted from request time
+   - Signup tokens and change tokens live in **separate tables** so one can never be replayed against the other's endpoint — keep it that way rather than adding a `purpose` column
+   - Audit actions: `auth.email.verification.sent`, `auth.email.verify`, `user.email.change.requested`, `user.email.change`, `admin.user.email.verify` (operator break-glass, deliberately distinct from the self-service action)
+
+6. **Rate limiting**
    - Global: 200 requests per 15 minutes (per IP)
    - Register: 2 requests per hour (per IP)
    - Login per (IP, email): 3 failed attempts per 15 minutes
    - Login per email: 30 attempts per hour (caps single-account brute-force regardless of source IP)
    - Login per IP: 60 **failed** attempts per 15 minutes (bounds credential stuffing across many accounts from one source; the compound key above resets per email, so it cannot). Successes are not counted, so shared egress IPs are unaffected
    - Data export (`/user/me/export`): 5 per hour, keyed by **user** rather than IP — the endpoint loads a full todo history, so repeat calls are the cost
-   - Email verification: redemption 30 per 15 minutes (per IP); resend 3 per hour keyed by the **blind index of the address**, since abuse here costs someone else's inbox and our sender reputation
+   - Email verification: redemption 30 per 15 minutes (per IP; shared by `/auth/verify` and `/auth/verify-email-change`); resend 3 per hour keyed by the **blind index of the address**, since abuse here costs someone else's inbox and our sender reputation
+   - Email change request (`PATCH /user/me/email`): 3 per hour keyed by the blind index of the **target** address — same mail-bomb shape as resend; a per-user key would let one account spray many victims
    - Read operations: 100 per minute (per IP)
    - Write operations: 30 per minute (per IP; includes `/auth/logout-all`)
    - Refresh-token operations (`/auth/refresh`, `/auth/logout`): 60 per 15 minutes (per IP)
@@ -246,9 +258,27 @@ For the full configuration reference (all variables, CORS, examples), see `docs/
 
 ```env
 DATABASE_URL=postgresql://user:password@localhost:5432/todo-api  # PostgreSQL connection string
+DATABASE_MIGRATE_URL=postgresql://db_admin:...@localhost:5432/todo-api  # Migrations (db_admin); falls back to DATABASE_URL
 JWT_SECRET=your-secret-key-min-32-chars                          # JWT signing secret
+CORS_ORIGIN=http://localhost:3000                                # No default — startup fails without it
+ENCRYPTION_KEYRING=k1:<base64-32-byte-key>                       # Field encryption (email at rest)
+ENCRYPTION_ACTIVE_KEY_ID=k1
+ENCRYPTION_BLIND_INDEX_KEY=<base64-32-byte-key>
 PORT=3001                                                         # Server port
 ```
+
+`NODE_ENV=production` additionally requires — startup aborts otherwise: `METRICS_TOKEN` (32+ chars),
+non-placeholder `ENCRYPTION_*` keys, `RESEND_API_KEY`, `MAIL_FROM`, and a non-localhost
+`APP_BASE_URL`. The mail three can be waived for a production-mode stack that serves no real users
+(docker-compose, e2e) with `ALLOW_LOG_MAIL_TRANSPORT_PRODUCTION_CONFIRM=true`, which logs a WARNING
+and prints verification links to the log instead of sending them.
+
+Three cross-field invariants are checked in every environment and also abort startup:
+`SHUTDOWN_TIMEOUT_MS > SHUTDOWN_DELAY_MS`, `DB_POOL_MIN <= DB_POOL_MAX`, and
+`JWT_SECRET_PREVIOUS != JWT_SECRET` (see `assertEnvInvariants` in `src/config/env.ts`).
+
+A guard test (`__tests__/unit/env-example-guard.test.ts`) fails CI when a variable is declared in
+`src/config/env.ts` but missing from `.env.example`, or vice versa — add new variables to both.
 
 ### Setup Steps
 
@@ -256,7 +286,8 @@ PORT=3001                                                         # Server port
 2. Configure environment variables (see `docs/configuration.md` for all options)
 3. Ensure PostgreSQL is running (local or cloud instance)
 4. Run `pnpm install`
-5. Run `pnpm exec prisma migrate dev` to setup database
+5. Run `pnpm exec prisma migrate deploy` to set up the database — **not `migrate dev`**, which needs a
+   shadow database the non-superuser `db_admin` role cannot create (P3014)
 6. Run `pnpm run dev`
 
 ### Schema changes
@@ -266,9 +297,14 @@ exist only in raw migration SQL — `schema.prisma` does not describe them, so P
 will generate SQL to drop them. Two hard rules (details: `docs/operations.md` → "Migration hazards"):
 
 - **Never run `prisma db push`.**
-- **Create migrations with `prisma migrate dev --create-only`** and hand-review the generated SQL;
-  delete any statement touching `audit_entries` unless deliberate. A guard test
-  (`__tests__/unit/migrations-guard.test.ts`) fails CI on violations.
+- **Hand-review every migration's SQL**; delete any statement touching `audit_entries` unless
+  deliberate. A guard test (`__tests__/unit/migrations-guard.test.ts`) fails CI on violations.
+
+Note that `prisma migrate dev --create-only` **fails here with P3014** — it needs to create a shadow
+database and `db_admin` is deliberately not a superuser. Either hand-write the migration SQL
+(mirroring the style of the nearest generated migration) and verify with `prisma migrate deploy` +
+`prisma migrate status`, or point `DATABASE_MIGRATE_URL` at the local superuser DSN for the
+generation step only. Details: `docs/operations.md` → "Authoring a migration".
 
 ## Commit Guidelines
 
@@ -361,7 +397,7 @@ Detailed reference docs live in `docs/`. The README is a landing page with summa
 | `docs/pgbackrest-implementation.md` | pgBackRest backup and disaster-recovery guide (co-located Postgres image)                           |
 | `docs/benchmarks.md`                | Benchmark methodology, k6 scripts, load levels, reproduction                                        |
 | `docs/testing.md`                   | Test framework, helpers, writing tests, CI config                                                   |
-| `docs/runtime-correctness.md`       | Production runtime correctness plan (shutdown, pool, error handling)                                |
+| `docs/runtime-correctness.md`       | **Historical** — the 2026 shutdown/pool/error-handling remediation plan, fully implemented          |
 | `docs/databases.md`                 | Design memo for the audit-log (TimescaleDB) and future search (pg_trgm → Elasticsearch) workstreams |
 | `ROADMAP.md`                        | Phased platform/production-readiness plan (SOC 2 priorities, open vs. done)                         |
 
@@ -369,29 +405,32 @@ When changing API endpoints, update `docs/api.md`. When adding environment varia
 
 ## Key Files Quick Reference
 
-| File                             | Purpose                                                                                   |
-| -------------------------------- | ----------------------------------------------------------------------------------------- |
-| `src/index.ts`                   | Server startup, DB connection, graceful shutdown                                          |
-| `src/app.ts`                     | Express app factory, middleware pipeline                                                  |
-| `src/config/env.ts`              | Environment variable validation                                                           |
-| `src/types/index.ts`             | Core TypeScript type definitions                                                          |
-| `src/types/express.d.ts`         | Express Request/Response augmentation                                                     |
-| `src/errors/index.ts`            | Custom error classes (AppError, AuthError, etc.)                                          |
-| `src/middleware/auth.ts`         | JWT authentication (DB-free; sets `req.userId`)                                           |
-| `src/middleware/authorize.ts`    | `requireRole`/`requireAdmin` role guard (per-request role lookup; audits `access.denied`) |
-| `src/middleware/errorHandler.ts` | Centralized error handling with structured format                                         |
-| `src/middleware/validation.ts`   | Joi schemas and validation middleware                                                     |
-| `src/middleware/rateLimiter.ts`  | Rate limiting configuration                                                               |
-| `src/middleware/logger.ts`       | Pino logger setup                                                                         |
-| `src/models/User.ts`             | User model (password hashing, email field-encryption, profile/role mutations)             |
-| `src/models/Todo.ts`             | Todo model                                                                                |
-| `src/models/RefreshToken.ts`     | Refresh-token issue/verify/rotate/revoke + theft detection                                |
-| `src/routes/auth.ts`             | Register, login, refresh, logout, logout-all                                              |
-| `src/routes/user.ts`             | Self-service profile: `/user/me`, email/password change, delete, export                   |
-| `src/routes/admin.ts`            | Admin user management (`/admin/users`, role change, delete) — behind `requireAdmin`       |
-| `src/routes/health.ts`           | Health check endpoints (liveness/readiness)                                               |
-| `src/routes/todos.ts`            | CRUD operations for todos                                                                 |
-| `src/lib/tokens.ts`              | Access-token sign/verify + refresh-token generation/hashing                               |
-| `src/lib/crypto/`                | AES-256-GCM field encryption + keyed blind index (email at rest)                          |
-| `tsconfig.json`                  | TypeScript compiler configuration                                                         |
-| `tsconfig.test.json`             | TypeScript config for tests                                                               |
+| File                                   | Purpose                                                                                        |
+| -------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| `src/index.ts`                         | Server startup, DB connection, graceful shutdown                                               |
+| `src/app.ts`                           | Express app factory, middleware pipeline                                                       |
+| `src/config/env.ts`                    | Environment variable validation                                                                |
+| `src/types/index.ts`                   | Core TypeScript type definitions                                                               |
+| `src/types/express.d.ts`               | Express Request/Response augmentation                                                          |
+| `src/errors/index.ts`                  | Custom error classes (AppError, AuthError, etc.)                                               |
+| `src/middleware/auth.ts`               | JWT authentication (DB-free; sets `req.userId`)                                                |
+| `src/middleware/authorize.ts`          | `requireRole`/`requireAdmin` role guard (per-request role lookup; audits `access.denied`)      |
+| `src/middleware/errorHandler.ts`       | Centralized error handling with structured format                                              |
+| `src/middleware/validation.ts`         | Joi schemas and validation middleware                                                          |
+| `src/middleware/rateLimiter.ts`        | Rate limiting configuration                                                                    |
+| `src/middleware/logger.ts`             | Pino logger setup                                                                              |
+| `src/models/User.ts`                   | User model (password hashing, email field-encryption, profile/role mutations)                  |
+| `src/models/Todo.ts`                   | Todo model                                                                                     |
+| `src/models/RefreshToken.ts`           | Refresh-token issue/verify/rotate/revoke + theft detection                                     |
+| `src/models/EmailVerificationToken.ts` | Signup verification token issue/redeem (SHA-256 at rest, single use, marks `emailVerifiedAt`)  |
+| `src/models/EmailChangeToken.ts`       | Pending address + change token; commits the new email only on redemption                       |
+| `src/routes/auth.ts`                   | Register, verify, resend-verification, verify-email-change, login, refresh, logout, logout-all |
+| `src/routes/user.ts`                   | Self-service profile: `/user/me`, email-change request, password change, delete, export        |
+| `src/routes/admin.ts`                  | Admin user management (`/admin/users`, role change, delete) — behind `requireAdmin`            |
+| `src/routes/health.ts`                 | Health check endpoints (liveness/readiness)                                                    |
+| `src/routes/todos.ts`                  | CRUD operations for todos                                                                      |
+| `src/lib/tokens.ts`                    | Access-token sign/verify + refresh/verification token generation/hashing                       |
+| `src/lib/mailer.ts`                    | `Mailer` interface + Resend adapter (`fetch`) and dev log transport                            |
+| `src/lib/crypto/`                      | AES-256-GCM field encryption + keyed blind index (email at rest)                               |
+| `tsconfig.json`                        | TypeScript compiler configuration                                                              |
+| `tsconfig.test.json`                   | TypeScript config for tests                                                                    |

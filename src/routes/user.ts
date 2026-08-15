@@ -1,12 +1,21 @@
 import express, { Response, Router } from 'express';
 import UserService from '../models/User.js';
 import TodoService from '../models/Todo.js';
+import EmailChangeTokenService from '../models/EmailChangeToken.js';
 import { auth, requireUserId } from '../middleware/auth.js';
-import { exportLimiter, readLimiter, writeLimiter } from '../middleware/rateLimiter.js';
+import {
+  emailChangeLimiter,
+  exportLimiter,
+  readLimiter,
+  writeLimiter,
+} from '../middleware/rateLimiter.js';
 import { validate, schemas } from '../middleware/validation.js';
 import { InvalidCredentialsError, UserNotFoundError } from '../errors/index.js';
 import { writeOrLog } from '../lib/auditLog.js';
 import { AuditAction } from '../lib/auditActions.js';
+import { mailer, emailChangeUrl } from '../lib/mailer.js';
+import { verificationEmailFailuresTotal } from '../middleware/metrics.js';
+import { blindIndex } from '../lib/crypto/fieldCrypto.js';
 import prisma from '../lib/prisma.js';
 import type { RequestWithLogger } from '../types/index.js';
 
@@ -54,10 +63,22 @@ router.patch(
 // PATCH email: credential-sensitive, so it re-authenticates with the current
 // password. Verification is unconditional — both fields are required by the
 // schema — so there is no request-controlled path that skips the check.
+//
+// The password proves who is asking; it proves nothing about the address being
+// asked for. So this stages the change and mails a token to the new address —
+// redeeming it (POST /auth/verify-email-change) is what moves the account.
+// Until then the current address stays live, which is what makes a typo
+// recoverable instead of an instant self-lockout.
+//
+// Responds 202 with a fixed body whether or not the address is already taken:
+// an authenticated user could otherwise walk addresses through this endpoint and
+// read account existence off the status code. A taken address simply never
+// yields a usable token (redemption re-checks and refuses).
 router.patch(
   '/me/email',
   auth,
   writeLimiter,
+  emailChangeLimiter,
   validate(schemas.changeEmail),
   async (req, res: Response): Promise<void> => {
     const { log } = req as RequestWithLogger;
@@ -67,9 +88,38 @@ router.patch(
     const ok = await UserService.verifyPassword(userId, currentPassword);
     if (!ok) throw new InvalidCredentialsError();
 
-    const updated = await UserService.updateProfile(userId, { email });
-    log.info({ userId }, 'User email updated');
-    res.json(updated);
+    const rawToken = await EmailChangeTokenService.issue(userId, email);
+
+    // Fire-and-forget for the same reason registration is: awaiting a
+    // third-party HTTP call would make this endpoint's latency depend on the
+    // provider, and a send failure must not roll back a request the user can
+    // simply repeat.
+    void mailer
+      .sendEmailChangeVerification({ to: email, verifyUrl: emailChangeUrl(rawToken) })
+      .catch((err: unknown) => {
+        verificationEmailFailuresTotal.inc();
+        log.error({ err, userId }, 'Email-change verification failed to send');
+      });
+
+    void writeOrLog(
+      prisma,
+      {
+        action: AuditAction.UserEmailChangeRequested,
+        outcome: 'success',
+        entityType: 'User',
+        entityId: userId,
+        changedBy: userId,
+        // Blind index only — audit_entries JSONB is neither redacted nor
+        // encrypted, so a raw address here would be PII at rest.
+        newValue: { emailHash: blindIndex(email) },
+      },
+      log,
+    );
+
+    log.info({ userId }, 'Email change requested; verification dispatched to the new address');
+    res.status(202).json({
+      message: 'Check the new address for a confirmation link. Your current email is unchanged.',
+    });
   },
 );
 

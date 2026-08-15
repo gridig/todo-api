@@ -48,6 +48,7 @@ model User {
   todos      Todo[]
   refreshTokens RefreshToken[]
   emailVerificationTokens EmailVerificationToken[]
+  emailChangeTokens EmailChangeToken[]
 
   // Backs the admin user listing (ORDER BY created_at DESC, cursor on id).
   @@index([createdAt])
@@ -94,6 +95,35 @@ model EmailVerificationToken {
   @@index([userId])
   @@index([expiresAt])
   @@map("email_verification_tokens")
+}
+
+// Pending address change. Separate table from EmailVerificationToken rather than
+// a `purpose` column on it: the two tokens authorize different things, and
+// keeping them in different tables means a signup token can never be replayed
+// against the change endpoint (or vice versa) however the redemption code is
+// later refactored.
+model EmailChangeToken {
+  id           String    @id @default(uuid()) @db.Uuid
+  // SHA-256 hex of the opaque token, same scheme as EmailVerificationToken.
+  tokenHash    String    @unique @map("token_hash")
+  userId       String    @map("user_id") @db.Uuid
+  // The requested address, held here until the token is redeemed. Stored as
+  // AES-256-GCM ciphertext + keyed blind index, exactly like users.email — a
+  // pending address is the same PII as a live one.
+  newEmail     String    @map("new_email")
+  // NOT unique: two users may legitimately have a pending request for the same
+  // address, and re-requesting must not collide with your own outstanding row.
+  // Account uniqueness is enforced where it belongs — users.email_hash, checked
+  // again at redemption.
+  newEmailHash String    @map("new_email_hash")
+  expiresAt    DateTime  @map("expires_at") @db.Timestamptz
+  createdAt    DateTime  @default(now()) @map("created_at")
+  consumedAt   DateTime? @map("consumed_at") @db.Timestamptz
+  user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("email_change_tokens")
 }
 
 model AuditEntry {

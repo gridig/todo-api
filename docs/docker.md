@@ -23,6 +23,11 @@ The Docker setup uses a two-stage build. TypeScript is compiled to JavaScript vi
 ## Quick Start
 
 ```bash
+# Secrets first: compose interpolates JWT_SECRET, METRICS_TOKEN and the two
+# ENCRYPTION_* keys with ${VAR:?...}, so every compose command fails without
+# them. The committed template supplies dev values for all four.
+cp .env.example .env
+
 # Build the app image
 docker compose build
 
@@ -70,7 +75,10 @@ the build and [operations.md](operations.md#database-restore-disaster-recovery) 
 | Volume       | `redis_data` (persistent) |
 | Health check | `redis-cli ping` every 5s |
 
-Redis is provisioned for future use by the distributed rate limit store. The `REDIS_URL` environment variable is commented out in `docker-compose.yml` until the application code integrates it.
+Redis backs the distributed rate limit store (`src/middleware/rateLimitStore.ts`). The integration is
+live in the application code; `REDIS_URL` is left **commented out** in the `app` service so the default
+compose stack exercises the in-memory fallback path. Uncomment it to run cross-instance counting —
+the limiters then share counters, and `rate_limit_store_fallback_total` stays flat unless Redis drops.
 
 ### App
 
@@ -161,50 +169,81 @@ docker inspect --format='{{json .State.Health}}' todo-app | jq
 
 ## Environment Variables
 
-The `app` service in `docker-compose.yml` sets environment variables directly. For production, use an env file instead:
+The `app` service runs with `NODE_ENV=production` for parity with a real deploy. That means the
+production startup assertions apply: the stack refuses to boot on missing secrets rather than
+silently running with placeholders.
+
+### Secrets — must come from your shell or `.env`
+
+These four are interpolated with `${VAR:?error}`, so **any** `docker compose` command (`build`, `up`,
+`config`) fails immediately if they are unset. `cp .env.example .env` satisfies all of them with dev
+values:
+
+| Variable                     | Notes                                                                    |
+| ---------------------------- | ------------------------------------------------------------------------ |
+| `JWT_SECRET`                 | 32+ chars                                                                |
+| `METRICS_TOKEN`              | 32+ chars; gates `/metrics` and `/health/ready/detailed`                 |
+| `ENCRYPTION_KEYRING`         | `k1:<base64-32-byte-key>` — production rejects the committed placeholder |
+| `ENCRYPTION_BLIND_INDEX_KEY` | base64 32-byte HMAC key                                                  |
+
+### Set by the compose file
+
+| Variable                                      | Compose value                                               | Notes                                                                                                                         |
+| --------------------------------------------- | ----------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `NODE_ENV`                                    | `production`                                                | Deliberate parity; enables the production assertions                                                                          |
+| `DATABASE_URL`                                | `postgresql://db_app:db_app_dev@postgres:5432/todo_api`     | Restricted runtime role — **not** the superuser                                                                               |
+| `DATABASE_MIGRATE_URL`                        | `postgresql://db_admin:db_admin_dev@postgres:5432/todo_api` | Schema owner, migrations only                                                                                                 |
+| `CORS_ORIGIN`                                 | `http://localhost:3000,http://localhost:5173`               | No default in the app — startup fails without it                                                                              |
+| `ENCRYPTION_ACTIVE_KEY_ID`                    | `k1`                                                        | Must exist in the keyring                                                                                                     |
+| `APP_BASE_URL`                                | `http://localhost:3000`                                     | Origin used to build verification links                                                                                       |
+| `ALLOW_LOG_MAIL_TRANSPORT_PRODUCTION_CONFIRM` | `true`                                                      | Lets this production-mode stack boot with no mail vendor — see [Email verification](#email-verification-in-the-compose-stack) |
+| `PORT` / `LOG_LEVEL`                          | `3001` / `info`                                             |                                                                                                                               |
+| `REDIS_URL`                                   | _(commented out)_                                           | Uncomment for Redis-backed rate limiting                                                                                      |
+
+For a real deployment, supply an env file instead of the dev defaults:
 
 ```bash
 docker compose --env-file .env.production up -d
 ```
 
-### Required
-
-| Variable       | Description                                  | Docker Compose Default                                        |
-| -------------- | -------------------------------------------- | ------------------------------------------------------------- |
-| `DATABASE_URL` | PostgreSQL connection string                 | `postgresql://postgres:postgres@postgres:5432/todo_api`       |
-| `JWT_SECRET`   | JWT signing secret (32+ chars in production) | `docker-compose-dev-secret-change-in-production-min-32-chars` |
-
-### Optional
-
-| Variable           | Description                                                    | Default                          |
-| ------------------ | -------------------------------------------------------------- | -------------------------------- |
-| `NODE_ENV`         | Environment (`development`, `production`, `test`)              | `production`                     |
-| `PORT`             | Server port                                                    | `3001`                           |
-| `LOG_LEVEL`        | Log level (`fatal`, `error`, `warn`, `info`, `debug`, `trace`) | `info`                           |
-| `CORS_ORIGIN`      | Allowed origins (comma-separated or `*`)                       | `*`                              |
-| `CORS_CREDENTIALS` | Allow credentials in CORS                                      | `false`                          |
-| `CORS_METHODS`     | Allowed HTTP methods                                           | `GET,HEAD,PUT,PATCH,POST,DELETE` |
-| `CORS_HEADERS`     | Allowed request headers                                        | `Content-Type,Authorization`     |
-| `CORS_MAX_AGE`     | Preflight cache duration (seconds)                             | `86400`                          |
-
 **Important**: Inside the Docker network, `DATABASE_URL` must use the Postgres service name (`postgres`) as the host, not `localhost`. `localhost` inside a container refers to the container itself.
+
+### Email verification in the compose stack
+
+Registration returns `202` and issues no tokens — an account cannot log in until its address is
+verified. The stack ships **without** a mail vendor, so `ALLOW_LOG_MAIL_TRANSPORT_PRODUCTION_CONFIRM=true`
+lets it boot in production mode and the mailer falls back to the log transport. Startup logs a
+`WARNING` for as long as that flag is set; never set it on a user-serving deploy.
+
+To complete a signup against the compose stack, read the link out of the log:
+
+```bash
+docker compose logs -f app | grep -i 'verify-email'
+curl -X POST http://localhost:3001/auth/verify \
+  -H "Content-Type: application/json" -d '{"token":"<token-from-the-link>"}'
+```
+
+To exercise real delivery instead, set `RESEND_API_KEY` and `MAIL_FROM` on the `app` service, point
+`APP_BASE_URL` at a non-localhost origin, and drop the confirm flag.
 
 ## Health Checks
 
-The Dockerfile includes a `HEALTHCHECK` instruction. Docker automatically probes the container and reports status in `docker ps`:
+The Dockerfile includes a `HEALTHCHECK` instruction that probes `/health/ready` on `$PORT` (read from
+the environment, not hardcoded — a platform that injects its own `PORT` would otherwise mark a healthy
+container unhealthy and restart-loop it). Docker reports status in `docker ps`:
 
 ```
 CONTAINER ID   IMAGE          STATUS                   PORTS
 abc123         todo-api-app   Up 2 min (healthy)       0.0.0.0:3001->3001/tcp
 ```
 
-Two endpoints are available:
+Three endpoints are relevant:
 
-| Endpoint            | Purpose            | Returns                                                                                |
-| ------------------- | ------------------ | -------------------------------------------------------------------------------------- |
-| `GET /health`       | Liveness probe     | Always `200` if the process is alive                                                   |
-| `GET /health/ready` | Readiness probe    | `200` when healthy, `503` when the database is unreachable or the DB pool is saturated |
-| `GET /metrics`      | Prometheus metrics | `200` with process and application metrics in text exposition format                   |
+| Endpoint            | Purpose            | Returns                                                                                                                      |
+| ------------------- | ------------------ | ---------------------------------------------------------------------------------------------------------------------------- |
+| `GET /health`       | Liveness probe     | Always `200` if the process is alive                                                                                         |
+| `GET /health/ready` | Readiness probe    | `200` when healthy, `503` when the database is unreachable or the DB pool is saturated                                       |
+| `GET /metrics`      | Prometheus metrics | `200` with metrics in text exposition format — **requires `Authorization: Bearer $METRICS_TOKEN`** (mandatory in production) |
 
 For container orchestrators (Kubernetes, ECS):
 
