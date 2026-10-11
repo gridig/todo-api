@@ -1,8 +1,9 @@
 import pino from 'pino';
 import { REDACT_PATHS } from '@/middleware/logger.js';
 
-// Exercises the production redact config exactly the way errorHandler uses it:
-// log.error({ body: req.body, ... }). Pino wildcards match one path segment
+// Exercises the production redact config against a logged request body. The
+// errorHandler now logs body keys only, so this is defense in depth: any other
+// call site that logs `{ body: ... }` still gets it. Pino wildcards match one path segment
 // and leaf names must match exactly, so a new credential-bearing field name
 // (e.g. `currentPassword`) silently leaks unless REDACT_PATHS lists it. Every
 // such field accepted by a schema in middleware/validation.ts must appear in

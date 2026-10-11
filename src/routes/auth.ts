@@ -366,7 +366,7 @@ router.post(
     const token = signAccessToken(user.id);
     const refreshToken = await RefreshTokenService.issue(user.id);
 
-    log.info({ userId: user.id, email: user.email }, 'User logged in successfully');
+    log.info({ userId: user.id }, 'User logged in successfully');
     void writeOrLog(
       prisma,
       {
