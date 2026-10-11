@@ -58,7 +58,7 @@ async function deleteUserTx(
 // Bcrypt cost factor. OWASP 2024+ floor for new deployments. Existing
 // users keep their cost-10 hashes (bcrypt embeds cost in the hash, so
 // mixed cost is valid); the login flow opportunistically re-hashes at
-// SALT_ROUNDS on next successful auth. See UserService.updatePassword.
+// SALT_ROUNDS on next successful auth. See UserService.rehashPassword.
 const SALT_ROUNDS = 12;
 
 // Precomputed bcrypt hash of a deliberately unmatchable plaintext, used by the
@@ -312,12 +312,19 @@ export const UserService: UserServiceInterface = {
   // Re-hash and persist a user's password at the current SALT_ROUNDS.
   // Called from the login flow when bcrypt.getRounds(user.password) <
   // SALT_ROUNDS so legacy lower-cost hashes upgrade transparently.
-  async updatePassword(userId, plainPassword) {
+  //
+  // Compare-and-set on the hash read at login: the login path fires this
+  // without awaiting, and the bcrypt work takes long enough for a concurrent
+  // changePassword to commit in between. An unconditional write would then
+  // restore the OLD password over the new one. Returns false when the stored
+  // hash moved on (nothing to do — the newer hash is already current-cost).
+  async rehashPassword(userId, plainPassword, expectedHash) {
     const hashedPassword = await bcrypt.hash(plainPassword, SALT_ROUNDS);
-    await prisma.user.update({
-      where: { id: userId },
+    const { count } = await prisma.user.updateMany({
+      where: { id: userId, password: expectedHash },
       data: { password: hashedPassword },
     });
+    return count === 1;
   },
 
   // Cheap signal for the rehash-on-login path. Centralized so callers

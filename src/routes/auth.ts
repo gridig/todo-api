@@ -355,8 +355,10 @@ router.post(
     // Opportunistic password rehash at the current SALT_ROUNDS for legacy
     // cost-10 (or lower) hashes. Fire-and-forget — must not block the
     // response. Failure is non-fatal: the next successful login retries.
+    // Keyed on the hash we just verified against, so a password change that
+    // commits during the bcrypt work is never overwritten (see rehashPassword).
     if (UserService.needsRehash(user.password)) {
-      void UserService.updatePassword(user.id, password).catch((err: unknown) => {
+      void UserService.rehashPassword(user.id, password, user.password).catch((err: unknown) => {
         log.warn({ err, userId: user.id }, 'Password rehash failed, will retry on next login');
       });
     }
