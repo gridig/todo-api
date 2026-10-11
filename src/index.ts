@@ -71,7 +71,7 @@ export async function startServer() {
     if (ext.length === 0) {
       throw new Error(
         'TimescaleDB extension is missing — audit_entries requires it. ' +
-          'Verify the Postgres image (expected: timescale/timescaledb:latest-pg16) ' +
+          'Verify the Postgres image (expected: the timescale/timescaledb pg16 image pinned in docker/timescaledb/Dockerfile) ' +
           'and that `prisma migrate deploy` has applied 20260526000001_add_audit_entries.',
       );
     }
