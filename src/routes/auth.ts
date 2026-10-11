@@ -460,11 +460,15 @@ router.post(
 
 // Revoke every active refresh token for the authenticated user (e.g. "sign out
 // of all devices"). Requires a valid access token to identify the user.
+// This is the "my account may be compromised" button, so it also cancels any
+// pending email change: redemption needs no session, and a change staged by
+// whoever held the account would otherwise survive the logout.
 router.post('/logout-all', writeLimiter, auth, async (req, res): Promise<void> => {
   const { log } = req as RequestWithLogger;
   const userId = requireUserId(req);
 
   const { count } = await RefreshTokenService.revokeAllForUser(userId);
+  const cancelled = await EmailChangeTokenService.consumeAllForUser(userId);
   void writeOrLog(
     prisma,
     {
@@ -473,7 +477,7 @@ router.post('/logout-all', writeLimiter, auth, async (req, res): Promise<void> =
       entityType: 'User',
       entityId: userId,
       changedBy: userId,
-      metadata: { revokedCount: count },
+      metadata: { revokedCount: count, cancelledEmailChanges: cancelled.count },
     },
     log,
   );

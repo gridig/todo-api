@@ -4,6 +4,7 @@ import { env } from '../config/env.js';
 import { encryptField, decryptField, blindIndex } from '../lib/crypto/fieldCrypto.js';
 import auditLog from '../lib/auditLog.js';
 import { AuditAction } from '../lib/auditActions.js';
+import EmailChangeTokenService from './EmailChangeToken.js';
 import { DuplicateEmailError, UserNotFoundError } from '../errors/index.js';
 // On the users table the only unique column is email_hash, so a P2002 here is
 // always a duplicate email.
@@ -211,8 +212,9 @@ export const UserService: UserServiceInterface = {
     }
   },
 
-  // Change password and revoke every live refresh token in one transaction, so a
-  // password change can't leave a stolen session alive. Mirrors
+  // Change password, revoke every live refresh token, and cancel any pending
+  // email change in one transaction, so a password change can't leave a stolen
+  // session — or an attacker-staged address change — alive. Mirrors
   // RefreshTokenService.revokeAllForUser's query but on the tx client for atomicity.
   async changePassword(userId, newPassword) {
     const hashedPassword = await bcrypt.hash(newPassword, SALT_ROUNDS);
@@ -222,13 +224,14 @@ export const UserService: UserServiceInterface = {
         where: { userId, revokedAt: null },
         data: { revokedAt: new Date() },
       });
+      const cancelled = await EmailChangeTokenService.consumeAllForUser(userId, tx);
       await auditLog.write(tx, {
         action: AuditAction.UserPasswordChange,
         outcome: 'success',
         entityType: 'User',
         entityId: userId,
         changedBy: userId,
-        metadata: { revokedCount: count },
+        metadata: { revokedCount: count, cancelledEmailChanges: cancelled.count },
       });
       return { revokedCount: count };
     });
