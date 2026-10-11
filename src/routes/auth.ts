@@ -355,8 +355,10 @@ router.post(
     // Opportunistic password rehash at the current SALT_ROUNDS for legacy
     // cost-10 (or lower) hashes. Fire-and-forget — must not block the
     // response. Failure is non-fatal: the next successful login retries.
+    // Keyed on the hash we just verified against, so a password change that
+    // commits during the bcrypt work is never overwritten (see rehashPassword).
     if (UserService.needsRehash(user.password)) {
-      void UserService.updatePassword(user.id, password).catch((err: unknown) => {
+      void UserService.rehashPassword(user.id, password, user.password).catch((err: unknown) => {
         log.warn({ err, userId: user.id }, 'Password rehash failed, will retry on next login');
       });
     }
@@ -364,7 +366,7 @@ router.post(
     const token = signAccessToken(user.id);
     const refreshToken = await RefreshTokenService.issue(user.id);
 
-    log.info({ userId: user.id, email: user.email }, 'User logged in successfully');
+    log.info({ userId: user.id }, 'User logged in successfully');
     void writeOrLog(
       prisma,
       {
@@ -458,11 +460,15 @@ router.post(
 
 // Revoke every active refresh token for the authenticated user (e.g. "sign out
 // of all devices"). Requires a valid access token to identify the user.
+// This is the "my account may be compromised" button, so it also cancels any
+// pending email change: redemption needs no session, and a change staged by
+// whoever held the account would otherwise survive the logout.
 router.post('/logout-all', writeLimiter, auth, async (req, res): Promise<void> => {
   const { log } = req as RequestWithLogger;
   const userId = requireUserId(req);
 
   const { count } = await RefreshTokenService.revokeAllForUser(userId);
+  const cancelled = await EmailChangeTokenService.consumeAllForUser(userId);
   void writeOrLog(
     prisma,
     {
@@ -471,7 +477,7 @@ router.post('/logout-all', writeLimiter, auth, async (req, res): Promise<void> =
       entityType: 'User',
       entityId: userId,
       changedBy: userId,
-      metadata: { revokedCount: count },
+      metadata: { revokedCount: count, cancelledEmailChanges: cancelled.count },
     },
     log,
   );

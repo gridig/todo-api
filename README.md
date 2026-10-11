@@ -155,7 +155,7 @@ Key Components:
 • Security: JWT auth, bcrypt hashing, rate limiting, input validation, three-role DB model, field encryption
 • Audit Log: lib/auditLog.ts (write inside $transaction, writeOrLog for non-blocking auth events); emissions in middleware/auth.ts, middleware/authorize.ts, routes/auth.ts, routes/todos.ts, routes/user.ts, routes/admin.ts, models/Todo.ts, models/User.ts
 • Request Context: lib/requestContext.ts AsyncLocalStorage holds requestId / ip / userAgent / userId for downstream audit writes
-• Startup Probes: index.ts refuses to boot if TimescaleDB extension is missing or audit_entries UPDATE does not return 42501
+• Startup Probes: index.ts refuses to boot if TimescaleDB extension is missing or the runtime role holds UPDATE on audit_entries
 • Types: Full TypeScript type definitions (types/index.ts, types/express.d.ts)
 ```
 
@@ -215,7 +215,8 @@ Key Components:
 | ---------------- | ---------- | -------------------------- | ------------------------------------------------------------------- |
 | **Global**       | 15 minutes | 200                        | All routes                                                          |
 | **Register**     | 1 hour     | 2                          | Account creation                                                    |
-| **Login**        | 15 minutes | 3 (failures, per IP+email) | Authentication (a per-email 30/hour cap also applies)               |
+| **Login**        | 15 minutes | 3 (failures, per IP+email) | Authentication                                                      |
+| **Login/email**  | 1 hour     | 30 (per email address)     | Authentication — caps one account regardless of source IP           |
 | **Login/IP**     | 15 minutes | 60 (failures, per IP)      | Authentication, across all accounts from one source                 |
 | **Verify**       | 15 minutes | 30                         | `/auth/verify`, `/auth/verify-email-change` (per IP)                |
 | **Resend**       | 1 hour     | 3 (per email address)      | `/auth/resend-verification` — abuse costs someone else's inbox      |
@@ -223,26 +224,28 @@ Key Components:
 | **Refresh**      | 15 minutes | 60                         | `/auth/refresh`, `/auth/logout` (`/auth/logout-all` uses **Write**) |
 | **Read**         | 1 minute   | 100                        | GET operations                                                      |
 | **Write**        | 1 minute   | 30                         | POST/PATCH/DELETE                                                   |
-| **Health**       | 1 minute   | 60                         | `/health/ready` (liveness `/health` is unlimited)                   |
+| **Health**       | 1 minute   | 60                         | `/health/ready`, `/health/ready/detailed` (`/health` is unlimited)  |
 | **Export**       | 1 hour     | 5 (per user)               | `/user/me/export`                                                   |
 
 ## Technology Stack
 
-- **TypeScript** 6.0.3 (strict mode, ES Modules)
-- **Node.js** 24+ + **Express** 5.2.1
-- **PostgreSQL** + **Prisma ORM** 7.9.1
-- **Authentication**: jsonwebtoken 9.0.3, bcrypt 6.0.0
+Major versions only — exact pins live in `package.json` / `pnpm-lock.yaml` and move with every Dependabot merge.
+
+- **TypeScript** 6.x (strict mode, ES Modules)
+- **Node.js** 24+ + **Express** 5.x
+- **PostgreSQL** (TimescaleDB) + **Prisma ORM** 7.x
+- **Authentication**: jsonwebtoken 9.x, bcrypt 6.x
 - **Security Headers**: helmet 8.x
-- **Validation**: joi 18.2.3, envalid 8.2.0
-- **Logging**: pino 10.3.1, pino-pretty 13.1.3
-- **Database Driver**: pg 8.22.0, @prisma/adapter-pg 7.9.1
-- **Rate Limiting**: express-rate-limit 8.6.1, rate-limit-redis 5.x (optional Redis store)
-- **Metrics**: prom-client 15.1.3 (Prometheus-compatible process and application metrics)
-- **CORS**: cors 2.8.6 (origin validation, preflight handling)
+- **Validation**: joi 18.x, envalid 8.x
+- **Logging**: pino 10.x, pino-pretty 13.x
+- **Database Driver**: pg 8.x, @prisma/adapter-pg 7.x
+- **Rate Limiting**: express-rate-limit 8.x, rate-limit-redis 5.x (optional Redis store)
+- **Metrics**: prom-client 15.x (Prometheus-compatible process and application metrics)
+- **CORS**: cors 2.x (origin validation, preflight handling)
 - **Outbound mail**: Resend HTTP API via `fetch` — no vendor SDK; the `Mailer` interface in `src/lib/mailer.ts` is the seam (log transport in dev)
-- **IDs**: uuid 14.0.1
-- **Testing**: Jest 30.4.2, Supertest 7.2.2, ts-jest 29.4.12
-- **Development**: tsx 4.23.1 (hot reload via `tsx watch`)
+- **IDs**: uuid 14.x
+- **Testing**: Jest 30.x, Supertest 7.x, ts-jest 29.x
+- **Development**: tsx 4.x (hot reload via `tsx watch`)
 
 ## Configuration
 
@@ -281,7 +284,7 @@ See [`docs/configuration.md`](docs/configuration.md) for the full reference incl
 - No cross-user data access
 - **Three-role DB model** (`db_admin` / `db_app` / `db_auditor`) so SOC 2 audit-trail immutability is enforced by Postgres `REVOKE`, not by app code that an attacker could bypass
 - **Immutable audit log** of authentication, authorization, and data-mutation events in a TimescaleDB hypertable with 1-year retention. Mutation audits live inside `prisma.$transaction` so an audit failure rolls back the mutation; auth audits fire-and-forget and alert via `audit_write_failures_total`
-- **Startup tamper-evidence probe**: the server attempts `UPDATE audit_entries SET action='probe' WHERE FALSE` at boot and refuses to start unless Postgres rejects it with `42501 permission denied` — catches a missing `REVOKE` or a wrong `DATABASE_URL` (superuser DSN) before the process serves traffic
+- **Startup tamper-evidence probe**: at boot the server checks `has_table_privilege(current_user, 'audit_entries', 'UPDATE')` and refuses to start if the runtime role holds it — catches a missing `REVOKE` or a wrong `DATABASE_URL` (superuser DSN, which always holds it) before the process serves traffic. A catalog query rather than a forbidden `UPDATE`, so a healthy boot emits no `prisma:error` line for log alerting to trip on
 - **TimescaleDB extension probe** at boot — the audit retention policy is meaningless without the extension, so the server refuses to start if it's not installed
 - **Login-failure email hashing**: failed-login audit rows store a **keyed HMAC blind index** of the email in `metadata` (the same value as `users.email_hash`), not the raw address and not a bare SHA-256 — so the audit table is never an offline-enumerable oracle for guessed addresses
 

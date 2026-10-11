@@ -112,6 +112,43 @@ describe('PATCH /user/me/email (request)', () => {
     expect(replayFirst.body.error.code).toBe('VERIFICATION_TOKEN_USED');
   });
 
+  // Redemption needs no session, so a change staged by whoever held the password
+  // must die with the "secure my account" actions — otherwise rotating the
+  // password still lets the attacker move the account to their inbox.
+  it('is cancelled by a password change', async () => {
+    const staged = await EmailChangeTokenService.issue(userId, `attacker-${userId}@example.com`);
+
+    const change = await request(app)
+      .patch('/user/me/password')
+      .set('Authorization', `Bearer ${authToken}`)
+      .send({ currentPassword: PASSWORD, newPassword: 'NewPass456!' });
+    expect(change.status).toBe(200);
+
+    const redeem = await request(app).post('/auth/verify-email-change').send({ token: staged });
+    expect(redeem.status).toBe(400);
+    expect(redeem.body.error.code).toBe('VERIFICATION_TOKEN_USED');
+
+    const row = await pollForAuditRow<{ metadata: { cancelledEmailChanges: number } }>(
+      'action = $1 AND changed_by = $2',
+      ['user.password.change', userId],
+    );
+    expect(row?.metadata.cancelledEmailChanges).toBe(1);
+  });
+
+  it('is cancelled by logout-all', async () => {
+    const staged = await EmailChangeTokenService.issue(userId, `attacker-${userId}@example.com`);
+
+    const logout = await request(app)
+      .post('/auth/logout-all')
+      .set('Authorization', `Bearer ${authToken}`)
+      .send();
+    expect(logout.status).toBe(200);
+
+    const redeem = await request(app).post('/auth/verify-email-change').send({ token: staged });
+    expect(redeem.status).toBe(400);
+    expect(redeem.body.error.code).toBe('VERIFICATION_TOKEN_USED');
+  });
+
   it('writes a requested audit row containing no plaintext email', async () => {
     const newEmail = `audit-${userId}@example.com`;
     await requestChange(newEmail);

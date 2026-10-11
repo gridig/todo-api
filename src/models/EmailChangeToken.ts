@@ -1,4 +1,5 @@
 import prisma from '../lib/prisma.js';
+import type { Prisma } from '../../prisma/generated/prisma/client.js';
 import { env } from '../config/env.js';
 import { blindIndex, decryptField, encryptField } from '../lib/crypto/fieldCrypto.js';
 import { normalizeEmail } from '../lib/normalizeEmail.js';
@@ -20,6 +21,23 @@ export type ChangeEmailResult =
   | { status: 'email_taken' };
 
 export const EmailChangeTokenService = {
+  // Cancel every outstanding change request for a user. Redemption is
+  // unauthenticated by design (the token is the credential), so a request staged
+  // by someone who held the password stays redeemable until it is consumed —
+  // every "secure my account" action (password change, logout-all, a future
+  // password reset) must call this or the attacker keeps a live path to move the
+  // account to their inbox. Takes the caller's transaction client so it commits
+  // atomically with the action that triggered it.
+  async consumeAllForUser(
+    userId: string,
+    client: Prisma.TransactionClient = prisma,
+  ): Promise<{ count: number }> {
+    return client.emailChangeToken.updateMany({
+      where: { userId, consumedAt: null },
+      data: { consumedAt: new Date() },
+    });
+  },
+
   // Stage an address change. The address is held as ciphertext + blind index
   // here and does NOT touch users until the token mailed to it is redeemed —
   // that redemption is the entire proof that the new inbox is reachable.
@@ -33,10 +51,7 @@ export const EmailChangeTokenService = {
     const now = new Date();
 
     await prisma.$transaction(async (tx) => {
-      await tx.emailChangeToken.updateMany({
-        where: { userId, consumedAt: null },
-        data: { consumedAt: now },
-      });
+      await EmailChangeTokenService.consumeAllForUser(userId, tx);
       await tx.emailChangeToken.create({
         data: {
           tokenHash: hash,

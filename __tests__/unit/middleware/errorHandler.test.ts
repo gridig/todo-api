@@ -24,6 +24,7 @@ describe('Error Handler Middleware', () => {
       query: {},
       log: {
         error: jest.fn(),
+        warn: jest.fn(),
       },
     };
     res = {
@@ -63,7 +64,9 @@ describe('Error Handler Middleware', () => {
           requestId: 'test-request-id',
         }),
       );
-      expect(req.log.error).toHaveBeenCalled();
+      // A 404 is an expected outcome, not a server fault: WARN, never ERROR.
+      expect(req.log.warn).toHaveBeenCalled();
+      expect(req.log.error).not.toHaveBeenCalled();
     });
 
     it('should handle generic AppError', () => {
@@ -451,11 +454,62 @@ describe('Error Handler Middleware', () => {
         expect.objectContaining({
           err: error,
           userId: 'user-123',
-          body: { text: 'test' },
+          statusCode: 500,
+          bodyKeys: ['text'],
           params: { id: 'abc' },
           query: { filter: 'active' },
         }),
         'Test error',
+      );
+    });
+
+    it('never logs request body values (free-text PII is not covered by redaction)', () => {
+      req.body = { text: 'call Jane at 555-0100', name: 'Jane Doe' };
+
+      errorHandler(new Error('boom'), req, res, next);
+      errorHandler(new TodoNotFoundError(), req, res, next);
+
+      const logged = JSON.stringify([...req.log.error.mock.calls, ...req.log.warn.mock.calls]);
+      expect(logged).not.toContain('555-0100');
+      expect(logged).not.toContain('Jane Doe');
+      expect(logged).toContain('"bodyKeys":["text","name"]');
+    });
+  });
+
+  describe('log levels (mirror requestLogger: 4xx and 503 WARN, other 5xx ERROR)', () => {
+    it('logs a 4xx AppError at warn with its code and no stack', () => {
+      errorHandler(new DuplicateEmailError(), req, res, next);
+
+      expect(req.log.error).not.toHaveBeenCalled();
+      expect(req.log.warn).toHaveBeenCalledWith(
+        expect.objectContaining({ statusCode: 409, errCode: 'DUPLICATE_EMAIL' }),
+        expect.any(String),
+      );
+      const [context] = req.log.warn.mock.calls[0];
+      expect(context.err).toBeUndefined();
+    });
+
+    it('logs a 503 at warn but keeps the full error for diagnosis', () => {
+      const error = new ServiceUnavailableError();
+
+      errorHandler(error, req, res, next);
+
+      expect(req.log.error).not.toHaveBeenCalled();
+      expect(req.log.warn).toHaveBeenCalledWith(
+        expect.objectContaining({ statusCode: 503, err: error }),
+        expect.any(String),
+      );
+    });
+
+    it('logs an unclassified failure at error', () => {
+      const error = new Error('db exploded');
+
+      errorHandler(error, req, res, next);
+
+      expect(req.log.warn).not.toHaveBeenCalled();
+      expect(req.log.error).toHaveBeenCalledWith(
+        expect.objectContaining({ statusCode: 500, err: error }),
+        'db exploded',
       );
     });
 

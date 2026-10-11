@@ -185,7 +185,9 @@ export interface UserServiceInterface {
   // Re-auth helper: compare a plaintext password against the stored hash for a
   // given user id. false when the user does not exist.
   verifyPassword(userId: string, plainPassword: string): Promise<boolean>;
-  updatePassword(userId: string, plainPassword: string): Promise<void>;
+  // Opportunistic cost upgrade, compare-and-set on the hash read at login so it
+  // can never overwrite a password changed in the meantime. false = skipped.
+  rehashPassword(userId: string, plainPassword: string, expectedHash: string): Promise<boolean>;
   // Update profile fields (name and/or email). An email change re-encrypts the
   // ciphertext column and recomputes the blind index atomically, audits the
   // change, and throws DuplicateEmailError on a blind-index collision.

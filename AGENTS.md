@@ -8,16 +8,18 @@ A production-ready RESTful API for managing todos with user authentication.
 
 **Stack:**
 
-- TypeScript 6.0.3 (strict mode, ES Modules)
-- Node.js 24+ with Express 5.2.1
+- TypeScript 6.x (strict mode, ES Modules)
+- Node.js 24+ with Express 5.x
 - PostgreSQL with Prisma ORM 7.x
-- JWT authentication (jsonwebtoken 9.0.3)
-- Bcrypt password hashing (6.0.0, 12 salt rounds)
+- JWT authentication (jsonwebtoken 9.x)
+- Bcrypt password hashing (6.x, 12 salt rounds)
 - Helmet secure HTTP headers (8.x)
 - Joi validation (18.x)
 - Pino structured logging (10.x)
-- Express-rate-limit (8.6.1), optional Redis store (redis 6.x, rate-limit-redis 5.x)
-- Testing: Jest 30.4.2, ts-jest, Supertest
+- Express-rate-limit (8.x), optional Redis store (redis 6.x, rate-limit-redis 5.x)
+- Testing: Jest 30.x, ts-jest, Supertest
+
+Versions in prose are majors only — exact versions live in `package.json` and change with every Dependabot merge.
 
 **Architecture:**
 
@@ -140,7 +142,7 @@ For the full testing guide (structure, helpers reference, writing tests, databas
 
 ### Framework
 
-- Jest 30.4.2 with TypeScript support (ts-jest, ESM)
+- Jest 30.x with TypeScript support (ts-jest, ESM)
 - PostgreSQL with Prisma for isolated testing
 - Supertest for HTTP assertions
 
@@ -198,15 +200,17 @@ For the full testing guide (structure, helpers reference, writing tests, databas
    - Do not bypass or disable redaction
 
 2. **User isolation**
-   - All database queries MUST include `user: req.userId`
+   - All queries on user-owned rows MUST filter on the authenticated user's id, read via `requireUserId(req)` (never `req.userId` directly)
    - Never allow cross-user data access
-   - Example: `Todo.find({ user: req.userId })` not `Todo.find({})`
+   - Example (Prisma): `prisma.todo.findFirst({ where: { id, userId } })`, not `findUnique({ where: { id } })` — the owner filter goes in the same query, so a cross-user id simply matches nothing (see `src/models/Todo.ts`)
+   - The one deliberate exception is the admin surface (`UserService.listUsers`, behind `requireAdmin`)
 
 3. **Password handling**
    - Passwords hashed with bcrypt (12 salt rounds, OWASP 2024+ floor)
-   - Legacy cost-10 hashes are valid (bcrypt embeds cost in the hash); the login flow opportunistically re-hashes them at the current cost via `UserService.updatePassword`
+   - Legacy cost-10 hashes are valid (bcrypt embeds cost in the hash); the login flow opportunistically re-hashes them at the current cost via `UserService.rehashPassword`, compare-and-set on the hash it verified so it can never overwrite a concurrent password change
    - Never store or return plain text passwords
-   - Use `user.comparePassword()` method for verification
+   - Verify with `UserService.comparePassword(plain, hash)` (login) or `UserService.verifyPassword(userId, plain)` (re-auth)
+   - Every "secure my account" action (password change, logout-all, and the future password reset) must also call `EmailChangeTokenService.consumeAllForUser` — email-change redemption is unauthenticated, so a staged change would otherwise survive it
 
 4. **JWT tokens**
    - Short-lived access tokens (`ACCESS_TOKEN_EXPIRY`, default 15m), HS256 only, paired with opaque **rotating refresh tokens** (`RefreshToken` model; `POST /auth/refresh` rotates, `/auth/logout` + `/auth/logout-all` revoke). Replaying a revoked refresh token is treated as theft and revokes the user's entire token set. Signing/verification live in `src/lib/tokens.ts`

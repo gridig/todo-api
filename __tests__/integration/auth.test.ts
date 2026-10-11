@@ -293,6 +293,35 @@ describe('Authentication Endpoints', () => {
       // Sanity: the rehashed value still authenticates the same plaintext.
       expect(await bcrypt.compare(password, after!.password)).toBe(true);
     });
+
+    it('never overwrites a password changed while the rehash was in flight', async () => {
+      // The login path reads the legacy hash, then rehashes without awaiting.
+      // Simulate a password change landing in between: the rehash must see the
+      // stored hash moved on and do nothing, rather than restore the old password.
+      const email = `rehash-race-${Date.now()}@example.com`;
+      const oldPassword = 'TestPass123!';
+      const legacyHash = await bcrypt.hash(oldPassword, 10);
+      const user = await prisma.user.create({
+        data: {
+          email: encryptField(normalizeEmail(email)),
+          emailHash: blindIndex(email),
+          password: legacyHash,
+        },
+        select: { id: true },
+      });
+
+      await UserService.changePassword(user.id, 'NewPass456!');
+
+      const applied = await UserService.rehashPassword(user.id, oldPassword, legacyHash);
+      expect(applied).toBe(false);
+
+      const stored = await prisma.user.findUnique({
+        where: { id: user.id },
+        select: { password: true },
+      });
+      expect(await bcrypt.compare('NewPass456!', stored!.password)).toBe(true);
+      expect(await bcrypt.compare(oldPassword, stored!.password)).toBe(false);
+    });
   });
 });
 

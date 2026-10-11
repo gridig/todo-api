@@ -8,7 +8,7 @@ import {
   ServiceUnavailableError,
 } from '../errors/index.js';
 import { classifyPrismaError } from '../errors/database.js';
-import type { RequestWithLogger } from '../types/index.js';
+import type { ErrorResponse, RequestWithLogger } from '../types/index.js';
 
 // Type guard for errors with a code property (Prisma errors, etc.)
 // Prisma 7 + driver adapter puts constraint info under driverAdapterError.cause.constraint.fields
@@ -60,14 +60,50 @@ const isPayloadTooLargeError = (error: unknown): error is PayloadTooLargeError =
   );
 };
 
-const respondWithAppError = (res: Response, requestId: string, appError: AppError): void => {
-  if (appError instanceof ServiceUnavailableError) {
-    res.setHeader('Retry-After', String(appError.retryAfterSeconds));
+// What the client gets back, resolved before anything is written so the log
+// line can be levelled by the status actually returned.
+interface ResolvedError {
+  statusCode: number;
+  body: ErrorResponse;
+  retryAfterSeconds?: number;
+}
+
+const fromAppError = (appError: AppError): ResolvedError => ({
+  statusCode: appError.statusCode,
+  body: appError.toJSON(),
+  ...(appError instanceof ServiceUnavailableError && {
+    retryAfterSeconds: appError.retryAfterSeconds,
+  }),
+});
+
+// Same levelling rule as requestLogger: 4xx and 503 (deliberate backpressure)
+// are WARN, every other 5xx is ERROR — so ERROR keeps its signal value for
+// on-call alerting instead of firing on every bad password or 404. Client
+// errors are expected outcomes, so they log the typed code rather than a stack.
+//
+// The request body is logged by key only. Values include free text (todo
+// `text`, display `name`) that REDACT_PATHS does not — and cannot sensibly —
+// cover, so logging them would put user PII in the log stream on every error.
+const logHandledError = (req: RequestWithLogger, err: Error, statusCode: number): void => {
+  const context = {
+    userId: (req as RequestWithLogger & { userId?: string }).userId,
+    statusCode,
+    bodyKeys:
+      req.body && typeof req.body === 'object' ? Object.keys(req.body as object) : undefined,
+    params: req.params,
+    query: req.query,
+  };
+  const msg = err.message || 'Unhandled error';
+
+  if (statusCode < 500) {
+    const code = err instanceof AppError ? err.code : undefined;
+    req.log.warn({ ...context, errCode: code, errName: err.name }, msg);
+  } else if (statusCode === 503) {
+    // Using 'err' key triggers Pino's automatic error serialization.
+    req.log.warn({ ...context, err }, msg);
+  } else {
+    req.log.error({ ...context, err }, msg);
   }
-  res.status(appError.statusCode).json({
-    ...appError.toJSON(),
-    requestId,
-  });
 };
 
 export const errorHandler = (
@@ -83,25 +119,19 @@ export const errorHandler = (
     return;
   }
 
-  const { log, id: requestId } = req;
-  // Log error with full context
-  // Using 'err' key triggers Pino's automatic error serialization
+  const response = toErrorResponse(err);
+  logHandledError(req, err, response.statusCode);
 
-  log.error(
-    {
-      err,
-      userId: (req as RequestWithLogger & { userId?: string }).userId,
-      body: req.body,
-      params: req.params,
-      query: req.query,
-    },
-    err.message || 'Unhandled error',
-  );
+  if (response.retryAfterSeconds !== undefined) {
+    res.setHeader('Retry-After', String(response.retryAfterSeconds));
+  }
+  res.status(response.statusCode).json({ ...response.body, requestId: req.id });
+};
 
+const toErrorResponse = (err: Error): ResolvedError => {
   // Handle our custom AppError instances
   if (err instanceof AppError) {
-    respondWithAppError(res, requestId, err);
-    return;
+    return fromAppError(err);
   }
 
   // Map known Prisma error codes (transient → 503, FK conflict → 409, etc.)
@@ -109,8 +139,7 @@ export const errorHandler = (
   // richer field-level routing) and for codes we don't recognise.
   const classified = classifyPrismaError(err);
   if (classified) {
-    respondWithAppError(res, requestId, classified);
-    return;
+    return fromAppError(classified);
   }
 
   // Handle Prisma P2002 unique constraint violation.
@@ -128,75 +157,64 @@ export const errorHandler = (
           : [];
     const field = fields[0] ?? 'field';
     const isEmailConstraint = fields.some((f) => f.toLowerCase().includes('email'));
-    const constraintError = isEmailConstraint
-      ? new DuplicateEmailError()
-      : new DuplicateValueError(field);
-    res.status(constraintError.statusCode).json({
-      ...constraintError.toJSON(),
-      requestId,
-    });
-    return;
+    return fromAppError(
+      isEmailConstraint ? new DuplicateEmailError() : new DuplicateValueError(field),
+    );
   }
 
   // Handle Prisma P2025 record not found
   if (hasCode(err) && err.code === 'P2025') {
-    const notFoundError = new NotFoundError('Record');
-    res.status(notFoundError.statusCode).json({
-      ...notFoundError.toJSON(),
-      requestId,
-    });
-    return;
+    return fromAppError(new NotFoundError('Record'));
   }
 
   // Handle invalid UUID format
   if (hasCode(err) && err.code === 'INVALID_UUID') {
-    res.status(400).json({
-      error: {
-        code: 'INVALID_ID_FORMAT',
-        message: 'Invalid ID format',
-        details: {
-          suggestion: 'Provide a valid UUID',
+    return {
+      statusCode: 400,
+      body: {
+        error: {
+          code: 'INVALID_ID_FORMAT',
+          message: 'Invalid ID format',
+          details: {
+            suggestion: 'Provide a valid UUID',
+          },
         },
       },
-      requestId,
-    });
-    return;
+    };
   }
 
   // Handle JSON parsing errors
   if (isJsonParseError(err)) {
-    res.status(400).json({
-      error: {
-        code: 'INVALID_JSON',
-        message: 'Invalid JSON in request body',
-        details: {
-          suggestion: 'Ensure your request body contains valid JSON',
+    return {
+      statusCode: 400,
+      body: {
+        error: {
+          code: 'INVALID_JSON',
+          message: 'Invalid JSON in request body',
+          details: {
+            suggestion: 'Ensure your request body contains valid JSON',
+          },
         },
       },
-      requestId,
-    });
-    return;
+    };
   }
 
   // Handle body-parser PayloadTooLargeError (BODY_LIMIT exceeded) → 413
   if (isPayloadTooLargeError(err)) {
-    res.status(413).json({
-      error: {
-        code: 'PAYLOAD_TOO_LARGE',
-        message: 'Request body exceeds the configured size limit',
-        details: {
-          suggestion: 'Reduce the request body size and retry',
+    return {
+      statusCode: 413,
+      body: {
+        error: {
+          code: 'PAYLOAD_TOO_LARGE',
+          message: 'Request body exceeds the configured size limit',
+          details: {
+            suggestion: 'Reduce the request body size and retry',
+          },
         },
       },
-      requestId,
-    });
-    return;
+    };
   }
 
   // Fallback for unknown errors (don't expose internal details)
-  const serverError = new InternalServerError();
-  res.status(serverError.statusCode).json({
-    ...serverError.toJSON(),
-    requestId,
-  });
+  return fromAppError(new InternalServerError());
 };

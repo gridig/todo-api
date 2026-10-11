@@ -42,8 +42,9 @@
   },
   "keywords": [],
   "author": "",
-  "license": "ISC",
-  "description": "",
+  "private": true,
+  "license": "UNLICENSED",
+  "description": "RESTful todo API with JWT auth, field-level encryption and an append-only audit log (internal use)",
   "dependencies": {
     "@prisma/adapter-pg": "7.9.1",
     "@prisma/client": "7.9.1",

@@ -54,9 +54,9 @@ The Prometheus metrics endpoint is already implemented — see `middleware/metri
 
 Counters that exist but have no alert wired to them: `audit_write_failures_total`, `rate_limit_store_fallback_total`, and `verification_email_failures_total`. The last is the most urgent — login is gated on a verified address, so a silent mail outage is a silent signup outage with nothing failing in the request path (triage: [operations.md → Verification email failures](docs/operations.md#verification-email-failures)).
 
-- [ ] Track API response times **[SOC 2]**
-- [ ] Monitor rate limit hits **[SOC 2]** (CC7.2: detect abuse patterns)
-- [ ] Track authentication failures **[SOC 2]** (CC7.2: detect brute force / credential stuffing)
+- [ ] Track API response times **[SOC 2]** — metric exists (`http_request_duration_seconds`, by method/route/status); dashboard + SLO alert remain
+- [ ] Monitor rate limit hits **[SOC 2]** (CC7.2: detect abuse patterns) — metric exists (`rate_limit_hits_total{limiter_type}`); dashboard + alert remain
+- [ ] Track authentication failures **[SOC 2]** (CC7.2: detect brute force / credential stuffing) — no metric yet (failures are audit rows only); add an `auth_failures_total{reason}` counter at the login/token/refresh/verify failure sites
 - [ ] Set up Grafana dashboards **[SOC 2]**
 - [ ] Add alerting for critical issues (error rate spikes, auth failures, downtime) **[SOC 2]**
 - [ ] Alert on `verification_email_failures_total` — any sustained non-zero rate means new accounts are being created that can never log in **[SOC 2]**
@@ -115,7 +115,7 @@ POST endpoints that create resources (`POST /todos`, `POST /auth/register`) have
 **Effort**: Medium
 **Impact**: High
 
-The Redis store factory is implemented in `middleware/rateLimiter.ts` with graceful in-memory fallback, `REDIS_URL` env var is configured, all **twelve** rate limiters (`auth`, `login-email`, `login-ip`, `write`, `read`, `global`, `register`, `health`, `refresh`, `user-export`, `verify-email`, `resend-verification`) use the shared store, and Redis disconnect is wired into graceful shutdown (2s cap, then `destroy()`). The remaining work is integration tests. Note: `REDIS_URL` is still commented out in the `app` service env in `docker-compose.yml`, so the compose app deliberately exercises the in-memory fallback path.
+The Redis store factory is implemented in `middleware/rateLimiter.ts` with graceful in-memory fallback, `REDIS_URL` env var is configured, all **thirteen** rate limiters (`auth`, `login-email`, `login-ip`, `write`, `read`, `global`, `register`, `health`, `refresh`, `user-export`, `verify-email`, `resend-verification`, `email-change`) use the shared store, and Redis disconnect is wired into graceful shutdown (2s cap, then `destroy()`). The remaining work is integration tests. Note: `REDIS_URL` is still commented out in the `app` service env in `docker-compose.yml`, so the compose app deliberately exercises the in-memory fallback path.
 
 - [ ] Add integration tests for shared rate limit counting — `__tests__/integration/rateLimit.test.ts` covers the `auth`, `login-ip` and `user-export` limiters against a single live instance, but nothing asserts that two instances sharing a Redis store share a counter
 - [ ] Cover the fallback path too: with Redis unreachable the limiters must keep serving from memory and increment `rate_limit_store_fallback_total` rather than failing requests
@@ -300,19 +300,19 @@ The roadmap items that required database schema migrations — **User Profile Ma
 
 ### Expired-row cleanup
 
-Two token tables accumulate rows that nothing deletes. Both services expose a `deleteExpired()` that is never called — there is no scheduler:
+Three token tables accumulate rows that nothing deletes. Each service exposes a `deleteExpired()` that is never called — there is no scheduler:
 
 - `RefreshTokenService.deleteExpired()` — revoked-but-unexpired rows must be kept so reuse detection still matches, so the job can only drain rows past `expires_at` (default 30 days).
 - `EmailVerificationTokenService.deleteExpired()` — consumed and expired verification tokens (default 24h lifetime), which turn over much faster.
 - `EmailChangeTokenService.deleteExpired()` — same lifetime, and these rows also hold a **pending address** (encrypted, but still PII at rest), so draining them is a data-minimisation win as well as a size one.
 
-A single interval or cron job draining both is enough at current scale. Until it exists, both tables grow monotonically.
+A single interval or cron job draining all three is enough at current scale — guard it with `pg_try_advisory_lock` so it runs once across instances and `CLUSTER_WORKERS`. Until it exists, all three tables grow monotonically (`refresh_tokens` gains a row on every refresh). The same job is the natural home for purging never-verified accounts after a TTL: today an unverified registration squats its address indefinitely.
 
 ### PII in Request/Response Logs
 
 Pino is configured to redact passwords, tokens, and auth headers. Two known gaps:
 
-- The todo `text` field — which users may populate with PII — is logged in some request/response paths. Audit whether `text` content appears in logs and add redaction or exclusion if so.
+- ~~The todo `text` field is logged in some request/response paths.~~ Closed for the main path: `errorHandler` now logs request-body **keys only**, never values (it previously logged the whole body on every error, and free text like `text`/`name` is not covered by `REDACT_PATHS`). Remaining: keep new `log.*` call sites to ids and field names, never user-entered values.
 - The **dev log mail transport prints the full verification link, token included**. That is the point of it locally, but it means a live single-use credential lands in the log stream — so the transport must never be selected anywhere logs are shipped or retained. Production refuses to boot without real mail config for exactly this reason; the escape hatch (`ALLOW_LOG_MAIL_TRANSPORT_PRODUCTION_CONFIRM`) is for stacks with no real users.
 
 ### Load Testing in CI

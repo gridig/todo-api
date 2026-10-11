@@ -4,6 +4,7 @@ import { env } from '../config/env.js';
 import { encryptField, decryptField, blindIndex } from '../lib/crypto/fieldCrypto.js';
 import auditLog from '../lib/auditLog.js';
 import { AuditAction } from '../lib/auditActions.js';
+import EmailChangeTokenService from './EmailChangeToken.js';
 import { DuplicateEmailError, UserNotFoundError } from '../errors/index.js';
 // On the users table the only unique column is email_hash, so a P2002 here is
 // always a duplicate email.
@@ -58,7 +59,7 @@ async function deleteUserTx(
 // Bcrypt cost factor. OWASP 2024+ floor for new deployments. Existing
 // users keep their cost-10 hashes (bcrypt embeds cost in the hash, so
 // mixed cost is valid); the login flow opportunistically re-hashes at
-// SALT_ROUNDS on next successful auth. See UserService.updatePassword.
+// SALT_ROUNDS on next successful auth. See UserService.rehashPassword.
 const SALT_ROUNDS = 12;
 
 // Precomputed bcrypt hash of a deliberately unmatchable plaintext, used by the
@@ -211,8 +212,9 @@ export const UserService: UserServiceInterface = {
     }
   },
 
-  // Change password and revoke every live refresh token in one transaction, so a
-  // password change can't leave a stolen session alive. Mirrors
+  // Change password, revoke every live refresh token, and cancel any pending
+  // email change in one transaction, so a password change can't leave a stolen
+  // session — or an attacker-staged address change — alive. Mirrors
   // RefreshTokenService.revokeAllForUser's query but on the tx client for atomicity.
   async changePassword(userId, newPassword) {
     const hashedPassword = await bcrypt.hash(newPassword, SALT_ROUNDS);
@@ -222,13 +224,14 @@ export const UserService: UserServiceInterface = {
         where: { userId, revokedAt: null },
         data: { revokedAt: new Date() },
       });
+      const cancelled = await EmailChangeTokenService.consumeAllForUser(userId, tx);
       await auditLog.write(tx, {
         action: AuditAction.UserPasswordChange,
         outcome: 'success',
         entityType: 'User',
         entityId: userId,
         changedBy: userId,
-        metadata: { revokedCount: count },
+        metadata: { revokedCount: count, cancelledEmailChanges: cancelled.count },
       });
       return { revokedCount: count };
     });
@@ -312,12 +315,19 @@ export const UserService: UserServiceInterface = {
   // Re-hash and persist a user's password at the current SALT_ROUNDS.
   // Called from the login flow when bcrypt.getRounds(user.password) <
   // SALT_ROUNDS so legacy lower-cost hashes upgrade transparently.
-  async updatePassword(userId, plainPassword) {
+  //
+  // Compare-and-set on the hash read at login: the login path fires this
+  // without awaiting, and the bcrypt work takes long enough for a concurrent
+  // changePassword to commit in between. An unconditional write would then
+  // restore the OLD password over the new one. Returns false when the stored
+  // hash moved on (nothing to do — the newer hash is already current-cost).
+  async rehashPassword(userId, plainPassword, expectedHash) {
     const hashedPassword = await bcrypt.hash(plainPassword, SALT_ROUNDS);
-    await prisma.user.update({
-      where: { id: userId },
+    const { count } = await prisma.user.updateMany({
+      where: { id: userId, password: expectedHash },
       data: { password: hashedPassword },
     });
+    return count === 1;
   },
 
   // Cheap signal for the rehash-on-login path. Centralized so callers

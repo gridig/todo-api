@@ -65,10 +65,11 @@ There is **no** `docker/pgbackrest/` directory — pgBackRest ships inside the T
 ### 2.1 `docker/timescaledb/Dockerfile`
 
 ```dockerfile
-# Pin the base tag for reproducibility (replace with the current pg16 tag you deploy).
+# Pin the base tag for reproducibility. The authoritative pin (tag + sha256 digest,
+# kept in lockstep with CI's service image) is docker/timescaledb/Dockerfile.
 # pgBackRest is installed once, here, and is the only pgBackRest in the system — so
 # archive-push / backup / restore can never drift across versions.
-FROM timescale/timescaledb:2.17.2-pg16
+FROM timescale/timescaledb:2.27.1-pg16
 
 USER root
 
